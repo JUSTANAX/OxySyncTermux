@@ -1,0 +1,503 @@
+import requests
+import time
+import os
+import sys
+import json
+import subprocess
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Config
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DATA_FILE         = "/sdcard/OxySync/data.json"
+APK_DIR           = "/sdcard/OxySync/apks/"
+HEARTBEAT_DIR     = "/sdcard/OxySync/"
+HEARTBEAT_TIMEOUT = 90
+PING_INTERVAL     = 60
+MAX_SLOTS         = 8
+
+EXECUTORS = {
+    "1": {"name": "Delta",    "path": "/sdcard/Delta/autoexec/"},
+    "2": {"name": "Vega X",   "path": "/sdcard/VegaX/autoexec/"},
+    "3": {"name": "Codex",    "path": "/sdcard/Codex/autoexec/"},
+    "4": {"name": "Arceus X", "path": "/sdcard/Arceus X/autoexec/"},
+}
+
+DEFAULT_PACKAGES = {
+    str(i): f"com.roblox.client{'' if i == 1 else i}"
+    for i in range(1, MAX_SLOTS + 1)
+}
+
+LUA_TEMPLATE = """\
+-- OxySync Slot {slot}
+local Players         = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local VirtualUser     = game:GetService("VirtualUser")
+
+local player      = Players.LocalPlayer
+local placeId     = game.PlaceId
+local isRejoining = false
+
+player.Idled:Connect(function()
+    VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    task.wait(1)
+    VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+end)
+
+player.OnTeleport:Connect(function(state)
+    if state == Enum.TeleportState.Failed and not isRejoining then
+        isRejoining = true
+        task.wait(3)
+        TeleportService:Teleport(placeId, player)
+    end
+end)
+
+local function rejoin()
+    if isRejoining then return end
+    isRejoining = true
+    task.wait(2)
+    TeleportService:Teleport(placeId, player)
+end
+
+game.Close:Connect(rejoin)
+
+task.spawn(function()
+    while true do
+        task.wait(20)
+        if not game:IsLoaded() and not isRejoining then
+            rejoin()
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        pcall(function()
+            writefile("/sdcard/OxySync/hb_{slot}.txt", tostring(os.time()))
+        end)
+        task.wait(30)
+    end
+end)
+"""
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Data
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_data() -> dict:
+    try:
+        with open(DATA_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {
+            "github_base_url": "",
+            "executor": None,
+            "packages": DEFAULT_PACKAGES.copy(),
+            "accounts": {str(i): None for i in range(1, MAX_SLOTS + 1)},
+        }
+
+def save_data(data: dict):
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Roblox API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def make_session(cookie: str) -> requests.Session:
+    s = requests.Session()
+    s.cookies.set(".ROBLOSECURITY", cookie, domain=".roblox.com")
+    s.headers.update({"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"})
+    return s
+
+def get_csrf(session: requests.Session) -> str:
+    r = session.post("https://auth.roblox.com/v2/logout")
+    return r.headers.get("x-csrf-token", "")
+
+def get_account_info(session: requests.Session) -> dict:
+    r = session.get("https://users.roblox.com/v1/users/authenticated")
+    return None if r.status_code == 401 else r.json()
+
+def get_presence(session: requests.Session, user_id: int) -> dict:
+    try:
+        r = session.post(
+            "https://presence.roblox.com/v1/presence/users",
+            json={"userIds": [user_id]}
+        )
+        if r.status_code != 200:
+            return {"status": "unknown", "game_name": None}
+        p = r.json().get("userPresences", [{}])[0]
+        status = {0: "offline", 1: "online", 2: "ingame", 3: "studio"}.get(
+            p.get("userPresenceType", 0), "offline"
+        )
+        return {"status": status, "game_name": p.get("lastLocation")}
+    except Exception:
+        return {"status": "unknown", "game_name": None}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Android utilities
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_apk_package(apk_path: str) -> str | None:
+    try:
+        r = subprocess.run(
+            ["aapt", "dump", "badging", apk_path],
+            capture_output=True, text=True
+        )
+        for line in r.stdout.splitlines():
+            if line.startswith("package: name="):
+                return line.split("'")[1]
+    except Exception:
+        pass
+    return None
+
+
+def is_package_installed(package: str) -> bool:
+    r = subprocess.run(["pm", "list", "packages", package], capture_output=True, text=True)
+    return package in r.stdout
+
+def is_process_running(package: str) -> bool:
+    r = subprocess.run(["pidof", package], capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+def launch_clone(package: str):
+    subprocess.run(
+        ["monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1"],
+        capture_output=True
+    )
+
+def install_apk_root(apk_path: str) -> bool:
+    r = subprocess.run(
+        ["su", "-c", f"pm install -r \"{apk_path}\""],
+        capture_output=True, text=True
+    )
+    return "success" in r.stdout.lower()
+
+def uninstall_root(package: str):
+    subprocess.run(["su", "-c", f"pm uninstall {package}"], capture_output=True)
+
+def is_heartbeat_alive(slot: int) -> bool:
+    try:
+        with open(f"{HEARTBEAT_DIR}hb_{slot}.txt") as f:
+            return (time.time() - int(f.read().strip())) < HEARTBEAT_TIMEOUT
+    except Exception:
+        return False
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Download
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def download_apk(url: str, dest: str, label: str) -> bool:
+    try:
+        r = requests.get(url, stream=True, timeout=60)
+        if r.status_code != 200:
+            print(f"    HTTP {r.status_code} — файл не найден")
+            return False
+        total = int(r.headers.get("content-length", 0))
+        done  = 0
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as f:
+            for chunk in r.iter_content(8192):
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    filled = int(done / total * 30)
+                    bar    = "█" * filled + "░" * (30 - filled)
+                    print(
+                        f"\r    {label}: [{bar}] {done/1024/1024:.1f}/{total/1024/1024:.1f} MB",
+                        end="", flush=True
+                    )
+        print()
+        return True
+    except Exception as e:
+        print(f"\n    Ошибка: {e}")
+        return False
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Lua
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def write_lua(executor_path: str, slot: int):
+    os.makedirs(executor_path, exist_ok=True)
+    with open(os.path.join(executor_path, f"oxysync_slot{slot}.lua"), "w") as f:
+        f.write(LUA_TEMPLATE.format(slot=slot))
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Display
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def banner():
+    print("\n" + "═" * 40)
+    print("       OxySync — Roblox Keeper")
+    print("═" * 40 + "\n")
+
+def print_menu():
+    print("  1. Установить клоны")
+    print("  2. Войти в аккаунты")
+    print("  3. Запустить игры")
+    print("  4. Переустановить клоны")
+    print("  5. Выход\n")
+
+def status_label(status: str) -> str:
+    return {"ingame": "В игре", "online": "Онлайн", "offline": "Офлайн", "studio": "Studio"}.get(status, status)
+
+def print_status_card(slot: int, username: str, presence: dict):
+    s  = status_label(presence["status"])
+    g  = (presence["game_name"] or "—")[:24]
+    u  = username[:24]
+    print(f"  ┌─ Слот {slot} {'─' * 31}┐")
+    print(f"  │  Никнейм : {u:<27}│")
+    print(f"  │  Статус  : {s:<27}│")
+    print(f"  │  Игра    : {g:<27}│")
+    print(f"  └{'─' * 38}┘")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Menu 1 & 4 — Install / Reinstall clones
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def menu_install_clones(data: dict, reinstall: bool = False):
+    title = "Переустановка клонов" if reinstall else "Установка клонов"
+    print(f"\n[ {title} ]\n")
+
+    # GitHub URL
+    base_url = data.get("github_base_url", "")
+    if base_url:
+        print(f"  Ссылка: {base_url}")
+        if input("  Изменить? (y/N): ").strip().lower() == "y":
+            base_url = ""
+    if not base_url:
+        print("  Пример: https://github.com/user/repo/releases/download/v1.0/")
+        base_url = input("  URL: ").strip().rstrip("/") + "/"
+        data["github_base_url"] = base_url
+        save_data(data)
+
+    # Executor
+    if not data.get("executor"):
+        print("\n  Выбери инжектор:")
+        for k, v in EXECUTORS.items():
+            print(f"    {k}. {v['name']}")
+        ch = input("  Номер: ").strip()
+        if ch in EXECUTORS:
+            data["executor"] = EXECUTORS[ch]
+            save_data(data)
+
+    # Slots
+    try:
+        count = int(input(f"\n  Сколько клонов? (1-{MAX_SLOTS}): ").strip())
+        count = max(1, min(count, MAX_SLOTS))
+    except ValueError:
+        count = 1
+
+    packages = data.get("packages", DEFAULT_PACKAGES)
+    print()
+
+    for slot in range(1, count + 1):
+        pkg      = packages.get(str(slot), DEFAULT_PACKAGES[str(slot)])
+        apk_name = f"roblox_{slot}.apk"
+        apk_path = APK_DIR + apk_name
+
+        print(f"  Слот {slot}")
+
+        if not download_apk(base_url + apk_name, apk_path, f"Слот {slot}"):
+            print(f"    Пропускаю слот {slot}.\n")
+            continue
+
+        # Определяем package name из APK
+        print(f"    Определяю package name...", end=" ", flush=True)
+        pkg = get_apk_package(apk_path)
+        if pkg:
+            print(f"{pkg}")
+            packages[str(slot)] = pkg
+            data["packages"] = packages
+            save_data(data)
+        else:
+            pkg = packages.get(str(slot), DEFAULT_PACKAGES[str(slot)])
+            print(f"не удалось, использую: {pkg}")
+
+        if reinstall and is_package_installed(pkg):
+            print(f"    Удаляю старую версию...")
+            uninstall_root(pkg)
+
+        print(f"    Устанавливаю...", end=" ", flush=True)
+        if install_apk_root(apk_path):
+            print("Готово ✓")
+        else:
+            print("Ошибка установки!")
+
+        if data.get("executor"):
+            write_lua(data["executor"]["path"], slot)
+        print()
+
+    print("  Готово.\n")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Menu 2 — Login
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def menu_login(data: dict):
+    print("\n[ Вход в аккаунты ]\n")
+    accounts = data.setdefault("accounts", {str(i): None for i in range(1, MAX_SLOTS + 1)})
+
+    print("  Текущие аккаунты:")
+    for i in range(1, MAX_SLOTS + 1):
+        acc = accounts.get(str(i))
+        print(f"    Слот {i}: {acc['username'] if acc else '—'}")
+    print()
+
+    try:
+        slot = int(input(f"  Слот (1-{MAX_SLOTS}): ").strip())
+        if not 1 <= slot <= MAX_SLOTS:
+            raise ValueError
+    except ValueError:
+        print("  Неверный слот.\n")
+        return
+
+    cookie = input(f"\n  Cookie для слота {slot}: ").strip()
+    if cookie.startswith(".ROBLOSECURITY="):
+        cookie = cookie.split("=", 1)[1]
+
+    session = make_session(cookie)
+    info    = get_account_info(session)
+    if not info:
+        print("  Неверный или просроченный cookie.\n")
+        return
+
+    username = info.get("name", "Unknown")
+    user_id  = info.get("id", 0)
+    accounts[str(slot)] = {"cookie": cookie, "username": username, "user_id": user_id}
+    save_data(data)
+    print(f"\n  Слот {slot} → {username} (ID: {user_id}) ✓\n")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Menu 3 — Launch + Monitor
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def menu_launch(data: dict):
+    print("\n[ Запуск игр ]\n")
+    accounts = data.get("accounts", {})
+    packages = data.get("packages", DEFAULT_PACKAGES)
+    executor = data.get("executor")
+
+    active = {s: a for s, a in accounts.items() if a is not None}
+    if not active:
+        print("  Нет аккаунтов. Войди в аккаунты (пункт 2).\n")
+        return
+
+    sessions = {}
+    for slot_str, acc in active.items():
+        slot = int(slot_str)
+        pkg  = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
+
+        if executor:
+            write_lua(executor["path"], slot)
+
+        print(f"  Слот {slot} ({acc['username']}): запуск...", end=" ", flush=True)
+        launch_clone(pkg)
+        print("✓")
+
+        s = make_session(acc["cookie"])
+        try:
+            s.headers.update({"X-CSRF-TOKEN": get_csrf(s)})
+        except Exception:
+            pass
+        sessions[slot_str] = s
+
+    print(f"\n  Ожидаю загрузку (25 сек)...")
+    time.sleep(25)
+
+    # Status cards
+    print("\n" + "─" * 40)
+    for slot_str, acc in active.items():
+        presence = get_presence(sessions[slot_str], acc["user_id"])
+        print_status_card(int(slot_str), acc["username"], presence)
+    print("─" * 40)
+
+    print(f"\n  Мониторинг запущен. Ctrl+C — стоп.\n")
+    monitor_all(sessions, active, packages)
+
+def monitor_all(sessions: dict, accounts: dict, packages: dict):
+    offline_counts = {s: 0 for s in sessions}
+
+    while True:
+        ts = time.strftime("%H:%M:%S")
+        for slot_str, session in sessions.items():
+            acc  = accounts[slot_str]
+            pkg  = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
+            slot = int(slot_str)
+            name = acc["username"]
+
+            try:
+                # Краш процесса
+                if not is_process_running(pkg):
+                    print(f"[{ts}] Слот {slot} ({name}): краш — перезапускаю...")
+                    launch_clone(pkg)
+                    offline_counts[slot_str] = 0
+                    continue
+
+                # Heartbeat
+                if not is_heartbeat_alive(slot):
+                    print(f"[{ts}] Слот {slot} ({name}): heartbeat устарел")
+
+                # Presence
+                presence  = get_presence(session, acc["user_id"])
+                status    = presence["status"]
+                game_name = presence["game_name"] or "—"
+
+                if status == "ingame":
+                    print(f"[{ts}] Слот {slot} ({name}): В игре — {game_name} ✓")
+                    offline_counts[slot_str] = 0
+                elif status == "online":
+                    print(f"[{ts}] Слот {slot} ({name}): Онлайн")
+                    offline_counts[slot_str] = 0
+                elif status == "offline":
+                    offline_counts[slot_str] += 1
+                    print(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
+                    if offline_counts[slot_str] >= 3:
+                        print(f"[{ts}] Слот {slot}: перезапускаю...")
+                        launch_clone(pkg)
+                        offline_counts[slot_str] = 0
+
+            except requests.exceptions.ConnectionError:
+                print(f"[{ts}] Нет интернета...")
+            except Exception as e:
+                if "403" in str(e) or "csrf" in str(e).lower():
+                    try:
+                        session.headers.update({"X-CSRF-TOKEN": get_csrf(session)})
+                    except Exception:
+                        pass
+
+        time.sleep(PING_INTERVAL)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def main():
+    banner()
+    data = load_data()
+
+    while True:
+        print_menu()
+        choice = input("  Выбор: ").strip()
+        print()
+
+        if choice == "1":
+            menu_install_clones(data)
+        elif choice == "2":
+            menu_login(data)
+        elif choice == "3":
+            menu_launch(data)
+        elif choice == "4":
+            menu_install_clones(data, reinstall=True)
+        elif choice == "5":
+            print("  Выход.\n")
+            break
+        else:
+            print("  Неверный выбор.\n")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n  OxySync остановлен.\n")
