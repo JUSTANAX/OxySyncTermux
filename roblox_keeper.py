@@ -247,10 +247,52 @@ def download_apk(url: str, dest: str, label: str) -> bool:
 #  Lua
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def write_lua(executor_path: str, slot: int):
+def build_dispatcher(accounts: dict) -> str:
+    """Генерирует единый Lua диспетчер для всех аккаунтов."""
+    base = LUA_TEMPLATE.replace(
+        "-- OxySync Slot {slot}", "-- OxySync Dispatcher"
+    ).replace(
+        'writefile("/sdcard/OxySync/hb_{slot}.txt"',
+        'writefile("/sdcard/OxySync/hb_" .. (game:GetService("Players").LocalPlayer.Name) .. ".txt"'
+    )
+    # Убираем строку с {slot} из heartbeat
+    lines = []
+    for line in base.splitlines():
+        if "{slot}" not in line:
+            lines.append(line)
+    base_clean = "\n".join(lines)
+
+    # Блоки пользовательских скриптов
+    dispatch_blocks = []
+    for slot_str, acc in sorted(accounts.items()):
+        if not acc:
+            continue
+        custom = acc.get("script", "").strip()
+        if not custom:
+            continue
+        username = acc["username"]
+        indented = "\n".join(f"    {l}" for l in custom.splitlines())
+        dispatch_blocks.append(
+            f'if username == "{username}" then\n{indented}\nend'
+        )
+
+    if not dispatch_blocks:
+        return base_clean
+
+    dispatch_section = (
+        "\n-- Мульти-скрипты\n"
+        "local username = game:GetService('Players').LocalPlayer.Name\n\n"
+        + "\nel".join(dispatch_blocks)
+    )
+
+    return base_clean + dispatch_section
+
+
+def write_lua(executor_path: str, accounts: dict):
+    """Записывает единый диспетчер в autoexec."""
     os.makedirs(executor_path, exist_ok=True)
-    with open(os.path.join(executor_path, f"oxysync_slot{slot}.lua"), "w") as f:
-        f.write(LUA_TEMPLATE.format(slot=slot))
+    with open(os.path.join(executor_path, "oxysync.lua"), "w") as f:
+        f.write(build_dispatcher(accounts))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Display
@@ -264,9 +306,10 @@ def banner():
 def print_menu():
     print("  1. Установить клоны")
     print("  2. Войти в аккаунты")
-    print("  3. Запустить игры")
-    print("  4. Переустановить клоны")
-    print("  5. Выход\n")
+    print("  3. Мульти-скрипты")
+    print("  4. Запустить игры")
+    print("  5. Переустановить клоны")
+    print("  6. Выход\n")
 
 def status_label(status: str) -> str:
     return {"ingame": "В игре", "online": "Онлайн", "offline": "Офлайн", "studio": "Studio"}.get(status, status)
@@ -384,7 +427,7 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         save_data(data)
 
         if data.get("executor"):
-            write_lua(data["executor"]["path"], slot)
+            write_lua(data["executor"]["path"], data["accounts"])
         print()
 
     print("  Готово.\n")
@@ -442,13 +485,14 @@ def menu_launch(data: dict):
         print("  Нет аккаунтов. Войди в аккаунты (пункт 2).\n")
         return
 
+    # Генерируем диспетчер перед запуском
+    if executor:
+        write_lua(executor["path"], data["accounts"])
+
     sessions = {}
     for slot_str, acc in active.items():
         slot = int(slot_str)
         pkg  = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
-
-        if executor:
-            write_lua(executor["path"], slot)
 
         print(f"  Слот {slot} ({acc['username']}): запуск...", end=" ", flush=True)
         launch_clone(pkg)
@@ -528,6 +572,92 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict):
         time.sleep(PING_INTERVAL)
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  Menu 3 — Multi-scripts
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def menu_scripts(data: dict):
+    print("\n[ Мульти-скрипты ]\n")
+    accounts = data.get("accounts", {})
+
+    active = {s: a for s, a in accounts.items() if a is not None}
+    if not active:
+        print("  Нет аккаунтов. Сначала войди в аккаунты (пункт 2).\n")
+        return
+
+    # Показываем текущие скрипты
+    print("  Назначенные скрипты:")
+    for slot_str, acc in sorted(active.items()):
+        has_script = bool(acc.get("script", "").strip())
+        marker     = "✓" if has_script else "—"
+        print(f"    Слот {slot_str} ({acc['username']}): {marker}")
+    print()
+    print("  1. Назначить скрипт слоту")
+    print("  2. Удалить скрипт у слота")
+    print("  3. Назад\n")
+
+    choice = input("  Выбор: ").strip()
+
+    if choice == "1":
+        try:
+            slot = int(input(f"\n  Слот (1-{MAX_SLOTS}): ").strip())
+            if str(slot) not in active:
+                print("  Слот не найден или пустой.\n")
+                return
+        except ValueError:
+            print("  Неверный слот.\n")
+            return
+
+        username = active[str(slot)]["username"]
+        print(f"\n  Скрипт для: {username}")
+        print("  Вставь Lua скрипт. Когда закончишь — введи END на новой строке:\n")
+
+        lines = []
+        while True:
+            try:
+                line = input()
+                if line.strip() == "END":
+                    break
+                lines.append(line)
+            except EOFError:
+                break
+
+        script = "\n".join(lines).strip()
+        if not script:
+            print("  Пустой скрипт, отмена.\n")
+            return
+
+        data["accounts"][str(slot)]["script"] = script
+        save_data(data)
+        print(f"\n  Скрипт для {username} сохранён ✓")
+
+        # Перегенерируем диспетчер если инжектор настроен
+        executor = data.get("executor")
+        if executor:
+            write_lua(executor["path"], data["accounts"])
+            print(f"  Диспетчер обновлён в {executor['path']}")
+        print()
+
+    elif choice == "2":
+        try:
+            slot = int(input(f"\n  Слот (1-{MAX_SLOTS}): ").strip())
+            if str(slot) not in active:
+                print("  Слот не найден.\n")
+                return
+        except ValueError:
+            print("  Неверный слот.\n")
+            return
+
+        username = active[str(slot)]["username"]
+        data["accounts"][str(slot)]["script"] = ""
+        save_data(data)
+        print(f"\n  Скрипт для {username} удалён ✓\n")
+
+        executor = data.get("executor")
+        if executor:
+            write_lua(executor["path"], data["accounts"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -545,10 +675,12 @@ def main():
         elif choice == "2":
             menu_login(data)
         elif choice == "3":
-            menu_launch(data)
+            menu_scripts(data)
         elif choice == "4":
-            menu_install_clones(data, reinstall=True)
+            menu_launch(data)
         elif choice == "5":
+            menu_install_clones(data, reinstall=True)
+        elif choice == "6":
             print("  Выход.\n")
             break
         else:
