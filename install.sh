@@ -13,11 +13,30 @@ echo "  ╚═══════════════════════
 echo ""
 
 # ── Зависимости ─────────────────────────────────────────────────────────────
-echo "  [1/4] Установка Python, curl и aapt..."
+echo "  [1/4] Установка системных пакетов..."
 pkg install python curl aapt -y -q 2>/dev/null
 
-echo "  [2/4] Установка библиотек..."
-pip install requests -q
+if ! command -v python &>/dev/null; then
+    echo "  Ошибка: Python не установился. Попробуй: pkg install python"
+    exit 1
+fi
+
+echo "  [2/4] Установка Python библиотек..."
+REQ_URL="https://raw.githubusercontent.com/JUSTANAX/OxySyncTermux/main/requirements.txt"
+TMP_REQ="/tmp/oxysync_requirements.txt"
+
+curl -sSL "$REQ_URL" -o "$TMP_REQ" 2>/dev/null || {
+    echo "  Не удалось скачать requirements.txt, ставлю базовые пакеты..."
+    echo "requests>=2.28.0,<3.0.0" > "$TMP_REQ"
+}
+
+pip install -r "$TMP_REQ" -q
+if [ $? -ne 0 ]; then
+    echo "  Ошибка: не удалось установить библиотеки."
+    echo "  Попробуй вручную: pip install requests"
+    exit 1
+fi
+rm -f "$TMP_REQ"
 
 # ── Данные репозитория ───────────────────────────────────────────────────────
 echo ""
@@ -57,9 +76,24 @@ chmod 600 "$CONFIG_FILE"
 
 # ── Лаунчер ──────────────────────────────────────────────────────────────────
 cat > "$LAUNCHER" << 'PYEOF'
-import requests
 import sys
 import os
+
+# Проверка зависимостей перед запуском
+def check_deps():
+    missing = []
+    try:
+        import requests
+    except ImportError:
+        missing.append("requests")
+    if missing:
+        print(f"  Отсутствуют библиотеки: {', '.join(missing)}")
+        print(f"  Запусти: pip install {' '.join(missing)}")
+        sys.exit(1)
+
+check_deps()
+
+import requests
 import base64
 
 INSTALL_DIR = os.path.expanduser("~/.oxysync")
