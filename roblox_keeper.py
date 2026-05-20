@@ -412,13 +412,16 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         else:
             print(f"не удалось, использую: {pkg}")
 
-        if reinstall and is_package_installed(pkg):
-            print(f"    Удаляю старую версию...")
-            uninstall_root(pkg)
+        # pm install -r обновляет APK сохраняя данные приложения (сессию)
+        # uninstall делаем только если package name сменился
+        old_pkg = packages.get(str(slot))
+        if reinstall and old_pkg and old_pkg != pkg and is_package_installed(old_pkg):
+            print(f"    Package name изменился, удаляю старый...")
+            uninstall_root(old_pkg)
 
         print(f"    Устанавливаю...", end=" ", flush=True)
         if install_apk_root(apk_path):
-            print("Готово ✓")
+            print("Готово ✓ (сессия сохранена)")
             if latest_tag:
                 versions[str(slot)] = latest_tag
         else:
