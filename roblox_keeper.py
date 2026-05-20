@@ -308,7 +308,7 @@ def print_menu():
     print("  2. Войти в аккаунты")
     print("  3. Мульти-скрипты")
     print("  4. Запустить игры")
-    print("  5. Переустановить клоны")
+    print("  5. Обновить клоны")
     print("  6. Выход\n")
 
 def status_label(status: str) -> str:
@@ -329,7 +329,7 @@ def print_status_card(slot: int, username: str, presence: dict):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def menu_install_clones(data: dict, reinstall: bool = False):
-    title = "Переустановка клонов" if reinstall else "Установка клонов"
+    title = "Обновление клонов" if reinstall else "Установка клонов"
     print(f"\n[ {title} ]\n")
 
     # GitHub URL
