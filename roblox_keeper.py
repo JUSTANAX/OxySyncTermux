@@ -136,6 +136,35 @@ def get_presence(session: requests.Session, user_id: int) -> dict:
         return {"status": "unknown", "game_name": None}
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  GitHub Releases
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def parse_github_url(base_url: str) -> tuple:
+    """Извлекает owner и repo из ссылки на GitHub Releases."""
+    try:
+        parts = base_url.rstrip("/").split("/")
+        gh_idx = next(i for i, p in enumerate(parts) if "github.com" in p)
+        return parts[gh_idx + 1], parts[gh_idx + 2]
+    except Exception:
+        return None, None
+
+
+def get_latest_release(owner: str, repo: str) -> dict:
+    """Возвращает данные последнего релиза с GitHub API."""
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{owner}/{repo}/releases/latest",
+            headers={"Accept": "application/vnd.github.v3+json"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Android utilities
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -290,6 +319,22 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         count = 1
 
     packages = data.get("packages", DEFAULT_PACKAGES)
+    versions = data.setdefault("versions", {})
+
+    # Проверяем последнюю версию на GitHub
+    owner, repo = parse_github_url(base_url)
+    latest_tag  = None
+    latest_url  = base_url
+
+    if owner and repo:
+        print("  Проверяю версию на GitHub...", end=" ", flush=True)
+        release    = get_latest_release(owner, repo)
+        latest_tag = release.get("tag_name")
+        if latest_tag:
+            latest_url = f"https://github.com/{owner}/{repo}/releases/download/{latest_tag}/"
+            print(latest_tag)
+        else:
+            print("не удалось, использую текущий URL")
     print()
 
     for slot in range(1, count + 1):
@@ -297,22 +342,31 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         apk_name = f"roblox_{slot}.apk"
         apk_path = APK_DIR + apk_name
 
-        print(f"  Слот {slot}")
+        # Пропускаем если версия актуальна
+        if (
+            not reinstall
+            and latest_tag
+            and versions.get(str(slot)) == latest_tag
+            and is_package_installed(pkg)
+        ):
+            print(f"  Слот {slot}: {latest_tag} уже установлена, пропускаю.")
+            continue
 
-        if not download_apk(base_url + apk_name, apk_path, f"Слот {slot}"):
+        print(f"  Слот {slot}:")
+
+        if not download_apk(latest_url + apk_name, apk_path, "    Загрузка"):
             print(f"    Пропускаю слот {slot}.\n")
             continue
 
         # Определяем package name из APK
-        print(f"    Определяю package name...", end=" ", flush=True)
-        pkg = get_apk_package(apk_path)
-        if pkg:
-            print(f"{pkg}")
-            packages[str(slot)] = pkg
+        print(f"    Package name...", end=" ", flush=True)
+        detected = get_apk_package(apk_path)
+        if detected:
+            print(detected)
+            packages[str(slot)] = detected
+            pkg = detected
             data["packages"] = packages
-            save_data(data)
         else:
-            pkg = packages.get(str(slot), DEFAULT_PACKAGES[str(slot)])
             print(f"не удалось, использую: {pkg}")
 
         if reinstall and is_package_installed(pkg):
@@ -322,8 +376,12 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         print(f"    Устанавливаю...", end=" ", flush=True)
         if install_apk_root(apk_path):
             print("Готово ✓")
+            if latest_tag:
+                versions[str(slot)] = latest_tag
         else:
             print("Ошибка установки!")
+
+        save_data(data)
 
         if data.get("executor"):
             write_lua(data["executor"]["path"], slot)
