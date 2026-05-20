@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import subprocess
+import re
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Config
@@ -190,11 +191,33 @@ def is_process_running(package: str) -> bool:
     r = subprocess.run(["pidof", package], capture_output=True, text=True)
     return bool(r.stdout.strip())
 
-def launch_clone(package: str):
-    subprocess.run(
-        ["monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1"],
-        capture_output=True
-    )
+def parse_place_id(value: str) -> str | None:
+    """Принимает ID, ссылку roblox.com или deep link — возвращает place ID."""
+    value = value.strip()
+    if value.isdigit():
+        return value
+    m = re.search(r'roblox\.com/games/(\d+)', value)
+    if m:
+        return m.group(1)
+    m = re.search(r'placeId=(\d+)', value)
+    if m:
+        return m.group(1)
+    return None
+
+
+def launch_clone(package: str, place_id: str = None):
+    if place_id:
+        subprocess.run([
+            "am", "start",
+            "-a", "android.intent.action.VIEW",
+            "-d", f"roblox://experiences/start?placeId={place_id}",
+            "-p", package,
+        ], capture_output=True)
+    else:
+        subprocess.run(
+            ["monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1"],
+            capture_output=True
+        )
 
 def install_apk_root(apk_path: str) -> bool:
     r = subprocess.run(
@@ -306,10 +329,11 @@ def banner():
 def print_menu():
     print("  1. Установить клоны")
     print("  2. Войти в аккаунты")
-    print("  3. Мульти-скрипты")
-    print("  4. Запустить игры")
-    print("  5. Обновить клоны")
-    print("  6. Выход\n")
+    print("  3. Настройка аккаунтов")
+    print("  4. Мульти-скрипты")
+    print("  5. Запустить игры")
+    print("  6. Обновить клоны")
+    print("  7. Выход\n")
 
 def status_label(status: str) -> str:
     return {"ingame": "В игре", "online": "Онлайн", "offline": "Офлайн", "studio": "Studio"}.get(status, status)
@@ -497,8 +521,9 @@ def menu_launch(data: dict):
         slot = int(slot_str)
         pkg  = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
 
+        place_id = acc.get("place_id")
         print(f"  Слот {slot} ({acc['username']}): запуск...", end=" ", flush=True)
-        launch_clone(pkg)
+        launch_clone(pkg, place_id)
         print("✓")
 
         s = make_session(acc["cookie"])
@@ -536,7 +561,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict):
                 # Краш процесса
                 if not is_process_running(pkg):
                     print(f"[{ts}] Слот {slot} ({name}): краш — перезапускаю...")
-                    launch_clone(pkg)
+                    launch_clone(pkg, acc.get("place_id"))
                     offline_counts[slot_str] = 0
                     continue
 
@@ -560,7 +585,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict):
                     print(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
                     if offline_counts[slot_str] >= 3:
                         print(f"[{ts}] Слот {slot}: перезапускаю...")
-                        launch_clone(pkg)
+                        launch_clone(pkg, acc.get("place_id"))
                         offline_counts[slot_str] = 0
 
             except requests.exceptions.ConnectionError:
@@ -575,7 +600,73 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict):
         time.sleep(PING_INTERVAL)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Menu 3 — Multi-scripts
+#  Menu 3 — Account settings
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def menu_account_settings(data: dict):
+    print("\n[ Настройка аккаунтов ]\n")
+    accounts = data.get("accounts", {})
+    active   = {s: a for s, a in accounts.items() if a is not None}
+
+    if not active:
+        print("  Нет аккаунтов. Сначала войди в аккаунты (пункт 2).\n")
+        return
+
+    # Показываем текущие привязки
+    print("  Привязанные плейсы:")
+    for slot_str, acc in sorted(active.items()):
+        place_id = acc.get("place_id")
+        place    = f"Place {place_id}" if place_id else "—"
+        print(f"    Слот {slot_str} ({acc['username']}): {place}")
+    print()
+    print("  1. Привязать плейс к слоту")
+    print("  2. Удалить привязку")
+    print("  3. Назад\n")
+
+    choice = input("  Выбор: ").strip()
+    print()
+
+    if choice == "1":
+        try:
+            slot = int(input(f"  Слот (1-{MAX_SLOTS}): ").strip())
+            if str(slot) not in active:
+                print("  Слот не найден.\n")
+                return
+        except ValueError:
+            print("  Неверный слот.\n")
+            return
+
+        username = active[str(slot)]["username"]
+        print(f"\n  Слот {slot} ({username})")
+        print("  Введи Place ID, ссылку roblox.com/games/... или deep link:")
+        raw = input("  : ").strip()
+
+        place_id = parse_place_id(raw)
+        if not place_id:
+            print("  Не удалось определить Place ID. Проверь ввод.\n")
+            return
+
+        data["accounts"][str(slot)]["place_id"] = place_id
+        save_data(data)
+        print(f"\n  Слот {slot} → Place {place_id} ✓\n")
+
+    elif choice == "2":
+        try:
+            slot = int(input(f"  Слот (1-{MAX_SLOTS}): ").strip())
+            if str(slot) not in active:
+                print("  Слот не найден.\n")
+                return
+        except ValueError:
+            print("  Неверный слот.\n")
+            return
+
+        data["accounts"][str(slot)].pop("place_id", None)
+        save_data(data)
+        print(f"  Привязка удалена ✓\n")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Menu 4 — Multi-scripts
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def menu_scripts(data: dict):
@@ -678,12 +769,14 @@ def main():
         elif choice == "2":
             menu_login(data)
         elif choice == "3":
-            menu_scripts(data)
+            menu_account_settings(data)
         elif choice == "4":
-            menu_launch(data)
+            menu_scripts(data)
         elif choice == "5":
-            menu_install_clones(data, reinstall=True)
+            menu_launch(data)
         elif choice == "6":
+            menu_install_clones(data, reinstall=True)
+        elif choice == "7":
             print("  Выход.\n")
             break
         else:
