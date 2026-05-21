@@ -38,10 +38,11 @@ chmod 700 "$INSTALL_DIR"
 cat > "$LAUNCHER" << PYEOF
 import requests, sys
 
+import time
 URL = "$SCRIPT_URL"
 
 try:
-    r = requests.get(URL, timeout=15)
+    r = requests.get(URL, params={"_": int(time.time())}, timeout=15)
     r.raise_for_status()
     exec(compile(r.text, "<oxysync>", "exec"), {"__name__": "__main__"})
 except requests.exceptions.ConnectionError:
