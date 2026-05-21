@@ -91,7 +91,7 @@ def load_data() -> dict:
             return json.load(f)
     except Exception:
         return {
-            "github_base_url": "",
+            "drive_folder_id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx",
             "executor": None,
             "packages": DEFAULT_PACKAGES.copy(),
             "accounts": {str(i): None for i in range(1, MAX_SLOTS + 1)},
@@ -137,32 +137,67 @@ def get_presence(session: requests.Session, user_id: int) -> dict:
         return {"status": "unknown", "game_name": None}
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  GitHub Releases
+#  Google Drive
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def parse_github_url(base_url: str) -> tuple:
-    """Извлекает owner и repo из ссылки на GitHub Releases."""
+def parse_drive_folder_id(url: str) -> str | None:
+    url = url.strip()
+    m = re.search(r'/folders/([a-zA-Z0-9_-]+)', url)
+    if m:
+        return m.group(1)
+    if re.match(r'^[a-zA-Z0-9_-]{25,}$', url):
+        return url
+    return None
+
+
+def list_drive_folder(folder_id: str) -> dict:
+    """Возвращает {filename: file_id} для файлов в публичной папке Google Drive."""
+    url = f"https://drive.google.com/embeddedfolderview?id={folder_id}"
     try:
-        parts = base_url.rstrip("/").split("/")
-        gh_idx = next(i for i, p in enumerate(parts) if "github.com" in p)
-        return parts[gh_idx + 1], parts[gh_idx + 2]
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        files = {}
+        for m in re.finditer(r'id="entry-([a-zA-Z0-9_-]+)"', r.text):
+            entry_id = m.group(1)
+            segment  = r.text[m.start():m.start() + 2000]
+            title_m  = re.search(r'class="flip-entry-title"[^>]*>([^<]+)<', segment)
+            if title_m:
+                files[title_m.group(1).strip()] = entry_id
+        return files
     except Exception:
-        return None, None
+        return {}
 
 
-def get_latest_release(owner: str, repo: str) -> dict:
-    """Возвращает данные последнего релиза с GitHub API."""
+def download_gdrive(file_id: str, dest: str, label: str) -> bool:
     try:
-        r = requests.get(
-            f"https://api.github.com/repos/{owner}/{repo}/releases/latest",
-            headers={"Accept": "application/vnd.github.v3+json"},
-            timeout=10,
+        s   = requests.Session()
+        s.headers["User-Agent"] = "Mozilla/5.0"
+        url = (
+            f"https://drive.usercontent.google.com/download"
+            f"?id={file_id}&export=download&confirm=t"
         )
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        pass
-    return {}
+        r = s.get(url, stream=True, timeout=120)
+        if r.status_code != 200:
+            print(f"    HTTP {r.status_code}")
+            return False
+        total = int(r.headers.get("content-length", 0))
+        done  = 0
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as f:
+            for chunk in r.iter_content(8192):
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    filled = int(done / total * 30)
+                    bar    = "█" * filled + "░" * (30 - filled)
+                    print(
+                        f"\r    {label}: [{bar}] {done/1024/1024:.1f}/{total/1024/1024:.1f} MB",
+                        end="", flush=True,
+                    )
+        print()
+        return True
+    except Exception as e:
+        print(f"\n    Ошибка: {e}")
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -356,16 +391,20 @@ def menu_install_clones(data: dict, reinstall: bool = False):
     title = "Обновление клонов" if reinstall else "Установка клонов"
     print(f"\n[ {title} ]\n")
 
-    # GitHub URL
-    base_url = data.get("github_base_url", "")
-    if base_url:
-        print(f"  Ссылка: {base_url}")
+    # Google Drive folder
+    folder_id = data.get("drive_folder_id", "")
+    if folder_id:
+        print(f"  Папка: {folder_id}")
         if input("  Изменить? (y/N): ").strip().lower() == "y":
-            base_url = ""
-    if not base_url:
-        print("  Пример: https://github.com/user/repo/releases/download/v1.0/")
-        base_url = input("  URL: ").strip().rstrip("/") + "/"
-        data["github_base_url"] = base_url
+            folder_id = ""
+    if not folder_id:
+        print("  Вставь ссылку на папку Google Drive:")
+        raw       = input("  URL: ").strip()
+        folder_id = parse_drive_folder_id(raw)
+        if not folder_id:
+            print("  Не удалось определить ID папки.\n")
+            return
+        data["drive_folder_id"] = folder_id
         save_data(data)
 
     # Executor
@@ -386,42 +425,35 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         count = 1
 
     packages = data.get("packages", DEFAULT_PACKAGES)
-    versions = data.setdefault("versions", {})
 
-    # Проверяем последнюю версию на GitHub
-    owner, repo = parse_github_url(base_url)
-    latest_tag  = None
-    latest_url  = base_url
-
-    if owner and repo:
-        print("  Проверяю версию на GitHub...", end=" ", flush=True)
-        release    = get_latest_release(owner, repo)
-        latest_tag = release.get("tag_name")
-        if latest_tag:
-            latest_url = f"https://github.com/{owner}/{repo}/releases/download/{latest_tag}/"
-            print(latest_tag)
-        else:
-            print("не удалось, использую текущий URL")
+    # Получаем список файлов в папке
+    print("  Получаю список файлов из Google Drive...", end=" ", flush=True)
+    drive_files = list_drive_folder(folder_id)
+    if drive_files:
+        print(f"найдено {len(drive_files)} файл(ов)")
+    else:
+        print("не удалось получить список файлов")
+        print("  Убедись что папка публичная (доступ: 'Всем у кого есть ссылка').\n")
+        return
     print()
 
     for slot in range(1, count + 1):
         pkg      = packages.get(str(slot), DEFAULT_PACKAGES[str(slot)])
-        apk_name = f"roblox_{slot}.apk"
+        apk_name = f"Vegax{slot}.apk"
         apk_path = APK_DIR + apk_name
 
-        # Пропускаем если версия актуальна
-        if (
-            not reinstall
-            and latest_tag
-            and versions.get(str(slot)) == latest_tag
-            and is_package_installed(pkg)
-        ):
-            print(f"  Слот {slot}: {latest_tag} уже установлена, пропускаю.")
+        if not reinstall and is_package_installed(pkg):
+            print(f"  Слот {slot}: уже установлен, пропускаю.")
+            continue
+
+        if apk_name not in drive_files:
+            print(f"  Слот {slot}: файл {apk_name} не найден в папке, пропускаю.")
             continue
 
         print(f"  Слот {slot}:")
+        file_id = drive_files[apk_name]
 
-        if not download_apk(latest_url + apk_name, apk_path, "    Загрузка"):
+        if not download_gdrive(file_id, apk_path, "    Загрузка"):
             print(f"    Пропускаю слот {slot}.\n")
             continue
 
@@ -436,8 +468,7 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         else:
             print(f"не удалось, использую: {pkg}")
 
-        # pm install -r обновляет APK сохраняя данные приложения (сессию)
-        # uninstall делаем только если package name сменился
+        # uninstall только если package name сменился
         old_pkg = packages.get(str(slot))
         if reinstall and old_pkg and old_pkg != pkg and is_package_installed(old_pkg):
             print(f"    Package name изменился, удаляю старый...")
@@ -446,8 +477,6 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         print(f"    Устанавливаю...", end=" ", flush=True)
         if install_apk_root(apk_path):
             print("Готово ✓ (сессия сохранена)")
-            if latest_tag:
-                versions[str(slot)] = latest_tag
         else:
             print("Ошибка установки!")
 

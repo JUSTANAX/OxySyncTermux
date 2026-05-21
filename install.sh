@@ -23,7 +23,7 @@ fi
 
 # ── 2. Python библиотеки ─────────────────────────────────────────────────────
 echo "  [2/3] Установка библиотек..."
-TMP_REQ="/tmp/oxysync_req.txt"
+TMP_REQ="${TMPDIR:-/tmp}/oxysync_req.txt"
 curl -sSL "$REQ_URL" -o "$TMP_REQ" 2>/dev/null || echo "requests>=2.28.0,<3.0.0" > "$TMP_REQ"
 pip install -r "$TMP_REQ" -q
 if [ $? -ne 0 ]; then
