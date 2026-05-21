@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "2.9"
+VERSION           = "3.0"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -415,6 +415,10 @@ def login_clone(package: str, cookie: str) -> bool:
         return False
     force_stop(package)
     time.sleep(1)
+    # Сначала запускаем приложение
+    _su(f"am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p {package}")
+    time.sleep(5)
+    # Затем отправляем auth ticket когда приложение готово
     _su(f"am start -a android.intent.action.VIEW -d 'roblox://authenticate?ticket={ticket}&returnToApp=1' -p {package}")
     return True
 
