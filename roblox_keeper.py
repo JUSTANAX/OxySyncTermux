@@ -10,6 +10,8 @@ import re
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
+VERSION           = "1.5"
+
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
 HEARTBEAT_DIR     = "/sdcard/OxySync/"
@@ -496,11 +498,14 @@ def _bot():
     print(f"  {CY}└{'─' * W}┘{RS}")
 
 def banner():
-    title = "OxySync — Roblox Keeper"
-    pad_l = (W - len(title)) // 2
-    pad_r = W - len(title) - pad_l
+    title   = "OxySync — Roblox Keeper"
+    ver     = f"v{VERSION}"
+    pad_l   = (W - len(title)) // 2
+    pad_r   = W - len(title) - pad_l
+    ver_pad = W - len(ver) - 2
     print(f"\n{CY}  ╔{'═' * W}╗{RS}")
     print(f"{CY}  ║{RS}{' ' * pad_l}{GR}{title}{RS}{' ' * pad_r}{CY}║{RS}")
+    print(f"{CY}  ║{RS}  {DM}{ver}{RS}{' ' * ver_pad}{CY}║{RS}")
     print(f"{CY}  ╚{'═' * W}╝{RS}\n")
 
 def print_menu():
