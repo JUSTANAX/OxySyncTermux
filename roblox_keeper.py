@@ -10,7 +10,7 @@ import re
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "2.0"
+VERSION           = "2.1"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -360,17 +360,9 @@ def parse_place_id(value: str) -> str | None:
 
 def launch_clone(package: str, place_id: str = None):
     if place_id:
-        subprocess.run([
-            "am", "start",
-            "-a", "android.intent.action.VIEW",
-            "-d", f"roblox://experiences/start?placeId={place_id}",
-            "-p", package,
-        ], capture_output=True)
+        _su(f"am start -a android.intent.action.VIEW -d 'roblox://experiences/start?placeId={place_id}' -p {package}")
     else:
-        subprocess.run(
-            ["monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1"],
-            capture_output=True
-        )
+        _su(f"am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p {package}")
 
 def _su(cmd: str) -> subprocess.CompletedProcess:
     return subprocess.run(
