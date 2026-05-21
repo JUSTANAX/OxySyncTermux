@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "2.8"
+VERSION           = "2.9"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -390,19 +390,28 @@ def uninstall_root(package: str):
 def force_stop(package: str):
     _su(f"am force-stop {package}")
 
-def get_auth_ticket(session: requests.Session) -> str | None:
+def get_auth_ticket(session: requests.Session) -> tuple[str | None, str]:
     try:
-        session.headers.update({"X-CSRF-TOKEN": get_csrf(session)})
+        csrf = get_csrf(session)
+        session.headers.update({
+            "X-CSRF-TOKEN": csrf,
+            "Referer": "https://www.roblox.com",
+            "Origin":  "https://www.roblox.com",
+        })
         r = session.post("https://auth.roblox.com/v1/authentication-ticket", timeout=10)
-        return r.headers.get("rbx-authentication-ticket")
-    except Exception:
-        return None
+        ticket = r.headers.get("rbx-authentication-ticket")
+        if ticket:
+            return ticket, ""
+        return None, f"HTTP {r.status_code}: {r.text[:100]}"
+    except Exception as e:
+        return None, str(e)
 
 def login_clone(package: str, cookie: str) -> bool:
     """Логинит клон через официальный auth ticket Roblox."""
     session = make_session(cookie)
-    ticket  = get_auth_ticket(session)
+    ticket, err = get_auth_ticket(session)
     if not ticket:
+        print(f"ticket: {err} ", end="", flush=True)
         return False
     force_stop(package)
     time.sleep(1)
