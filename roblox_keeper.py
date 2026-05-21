@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.0"
+VERSION           = "3.1"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -415,11 +415,19 @@ def login_clone(package: str, cookie: str) -> bool:
         return False
     force_stop(package)
     time.sleep(1)
-    # Сначала запускаем приложение
-    _su(f"am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p {package}")
-    time.sleep(5)
-    # Затем отправляем auth ticket когда приложение готово
-    _su(f"am start -a android.intent.action.VIEW -d 'roblox://authenticate?ticket={ticket}&returnToApp=1' -p {package}")
+    # Запускаем через ActivityProtocol — активити которая обрабатывает roblox:// ссылки
+    result = _su(
+        f"am start -n {package}/com.roblox.client.ActivityProtocol"
+        f" -a android.intent.action.VIEW"
+        f" -d 'roblox://authenticate?ticket={ticket}&returnToApp=1'"
+    )
+    # Если ActivityProtocol не найден — пробуем без указания активити
+    if result.returncode != 0:
+        _su(
+            f"am start -a android.intent.action.VIEW"
+            f" -d 'roblox://authenticate?ticket={ticket}&returnToApp=1'"
+            f" -p {package}"
+        )
     return True
 
 def inject_cookie(package: str, cookie: str) -> bool:
