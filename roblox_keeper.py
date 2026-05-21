@@ -10,7 +10,7 @@ import re
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "1.8"
+VERSION           = "1.9"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -993,6 +993,16 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        arg = sys.argv[1] if len(sys.argv) > 1 else None
+        if arg == "--install":
+            data = load_data()
+            banner()
+            menu_install_clones(data)
+        elif arg == "--update":
+            data = load_data()
+            banner()
+            menu_install_clones(data, reinstall=True)
+        else:
+            main()
     except KeyboardInterrupt:
         print("\n\n  OxySync остановлен.\n")
