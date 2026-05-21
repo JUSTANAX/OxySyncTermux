@@ -393,19 +393,9 @@ def menu_install_clones(data: dict, reinstall: bool = False):
 
     # Google Drive folder
     folder_id = data.get("drive_folder_id", "")
-    if folder_id:
-        print(f"  Папка: {folder_id}")
-        if input("  Изменить? (y/N): ").strip().lower() == "y":
-            folder_id = ""
     if not folder_id:
-        print("  Вставь ссылку на папку Google Drive:")
-        raw       = input("  URL: ").strip()
-        folder_id = parse_drive_folder_id(raw)
-        if not folder_id:
-            print("  Не удалось определить ID папки.\n")
-            return
-        data["drive_folder_id"] = folder_id
-        save_data(data)
+        print("  Ошибка: папка Google Drive не задана.\n")
+        return
 
     # Executor
     if not data.get("executor"):
