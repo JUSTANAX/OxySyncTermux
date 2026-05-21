@@ -254,12 +254,21 @@ def launch_clone(package: str, place_id: str = None):
             capture_output=True
         )
 
+def set_play_protect(enabled: bool):
+    val = "1" if enabled else "0"
+    subprocess.run(["su", "-c", f"settings put global package_verifier_enable {val}"], capture_output=True)
+    subprocess.run(["su", "-c", f"settings put global verifier_verify_adb_installs {val}"], capture_output=True)
+
 def install_apk_root(apk_path: str) -> bool:
-    r = subprocess.run(
-        ["su", "-c", f"pm install -r \"{apk_path}\""],
-        capture_output=True, text=True
-    )
-    return "success" in r.stdout.lower()
+    set_play_protect(False)
+    try:
+        r = subprocess.run(
+            ["su", "-c", f"pm install -r \"{apk_path}\""],
+            capture_output=True, text=True
+        )
+        return "success" in r.stdout.lower()
+    finally:
+        set_play_protect(True)
 
 def uninstall_root(package: str):
     subprocess.run(["su", "-c", f"pm uninstall {package}"], capture_output=True)
