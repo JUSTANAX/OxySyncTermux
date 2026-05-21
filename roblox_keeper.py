@@ -10,7 +10,7 @@ import re
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "1.9"
+VERSION           = "2.0"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -27,11 +27,11 @@ EXECUTORS = {
 }
 
 SOURCES = {
-    "1": {"name": "VegaX", "type": "gdrive", "id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx", "pattern": "Vegax{slot}.apk"},
+    "1": {"name": "VegaX", "type": "gdrive", "id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx"},
 }
 
 DEFAULT_PACKAGES = {
-    str(i): f"com.roblox.client{'' if i == 1 else i}"
+    str(i): f"com.roblox.clien{chr(ord('a') + i)}"
     for i in range(1, MAX_SLOTS + 1)
 }
 
@@ -599,7 +599,8 @@ def menu_install_clones(data: dict, reinstall: bool = False):
 
     for slot in range(1, count + 1):
         pkg      = packages.get(str(slot), DEFAULT_PACKAGES[str(slot)])
-        apk_name = source["pattern"].format(slot=slot)
+        letter   = chr(ord('a') + slot)
+        apk_name = f"com.roblox.clien{letter}.apk"
         apk_path = APK_DIR + apk_name
 
         if not reinstall and is_package_installed(pkg):
