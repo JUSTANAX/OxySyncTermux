@@ -210,34 +210,49 @@ def download_gdrive(file_id: str, dest: str, label: str) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def gofile_guest_token() -> str | None:
-    try:
-        r = requests.post("https://api.gofile.io/accounts", timeout=10)
-        if r.status_code == 200:
-            return r.json().get("data", {}).get("token")
-    except Exception:
-        pass
+    for url, method in [
+        ("https://api.gofile.io/accounts/getid", "get"),
+        ("https://api.gofile.io/accounts",       "post"),
+    ]:
+        try:
+            r = (requests.get if method == "get" else requests.post)(url, timeout=10)
+            if r.status_code == 200:
+                d = r.json()
+                if d.get("status") == "ok":
+                    return d["data"]["token"]
+        except Exception:
+            continue
     return None
 
 def list_gofile_folder(content_id: str) -> dict:
     """Возвращает {filename: (link, token)} для файлов в публичной папке gofile."""
     token = gofile_guest_token()
     if not token:
+        print("    Не удалось получить токен Gofile")
         return {}
     try:
         r = requests.get(
             f"https://api.gofile.io/contents/{content_id}",
             headers={"Authorization": f"Bearer {token}"},
-            params={"wt": "4fd6sg89d7s6", "cache": "true"},
+            params={"wt": "4fd6sg89d7s6"},
             timeout=15,
         )
         if r.status_code != 200:
+            print(f"    Gofile API: HTTP {r.status_code}")
+            return {}
+        d = r.json()
+        if d.get("status") != "ok":
+            print(f"    Gofile API: {d.get('status')} — {d.get('data', '')}")
             return {}
         files = {}
-        for child in r.json().get("data", {}).get("children", {}).values():
+        for child in d.get("data", {}).get("children", {}).values():
             if child.get("type") == "file":
-                files[child["name"]] = (child["link"], token)
+                link = child.get("link") or child.get("directLink", "")
+                if link:
+                    files[child["name"]] = (link, token)
         return files
-    except Exception:
+    except Exception as e:
+        print(f"    Gofile exception: {e}")
         return {}
 
 def download_gofile(link: str, token: str, dest: str, label: str) -> bool:
