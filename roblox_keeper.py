@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.1"
+VERSION           = "3.2"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -631,21 +631,23 @@ def print_menu():
     _desc("Скачать и установить клоны Roblox")
     _row("2", "Обновить клоны")
     _desc("Переустановить клоны, сохранив аккаунты")
+    _row("3", "Удалить клоны")
+    _desc("Удалить все установленные клоны")
     _bot()
     print()
 
     _top("АККАУНТЫ")
-    _row("3", "Войти в аккаунт")
+    _row("4", "Войти в аккаунт")
     _desc("Привязать Roblox аккаунт к слоту")
-    _row("4", "Настройка аккаунтов")
+    _row("5", "Настройка аккаунтов")
     _desc("Привязать игру к слоту")
     _bot()
     print()
 
     _top("ИГРА")
-    _row("5", "Мульти-скрипты")
+    _row("6", "Мульти-скрипты")
     _desc("Назначить Lua скрипт каждому слоту")
-    _row("6", "Запустить игры")
+    _row("7", "Запустить игры")
     _desc("Запустить все аккаунты и следить за ними")
     _bot()
     print()
@@ -777,6 +779,32 @@ def menu_install_clones(data: dict, reinstall: bool = False):
 def installed_slots(data: dict) -> list[int]:
     packages = data.get("packages", DEFAULT_PACKAGES)
     return [i for i in range(1, MAX_SLOTS + 1) if is_package_installed(packages.get(str(i), DEFAULT_PACKAGES[str(i)]))]
+
+def menu_delete_clones(data: dict):
+    print("\n[ Удаление клонов ]\n")
+    packages = data.get("packages", DEFAULT_PACKAGES)
+    slots    = installed_slots(data)
+
+    if not slots:
+        print("  Нет установленных клонов.\n")
+        return
+
+    print("  Установленные клоны:")
+    for i in slots:
+        print(f"    Слот {i}: {packages.get(str(i), DEFAULT_PACKAGES[str(i)])}")
+    print()
+    confirm = input("  Удалить все? (y/N): ").strip().lower()
+    if confirm != "y":
+        print("  Отмена.\n")
+        return
+    print()
+    for i in slots:
+        pkg = packages.get(str(i), DEFAULT_PACKAGES[str(i)])
+        print(f"  Слот {i}: удаляю...", end=" ", flush=True)
+        force_stop(pkg)
+        uninstall_root(pkg)
+        print("✓")
+    print("\n  Готово.\n")
 
 def menu_login(data: dict):
     print("\n[ Вход в аккаунты ]\n")
@@ -1104,12 +1132,14 @@ def main():
         elif choice == "2":
             menu_install_clones(data, reinstall=True)
         elif choice == "3":
-            menu_login(data)
+            menu_delete_clones(data)
         elif choice == "4":
-            menu_account_settings(data)
+            menu_login(data)
         elif choice == "5":
-            menu_scripts(data)
+            menu_account_settings(data)
         elif choice == "6":
+            menu_scripts(data)
+        elif choice == "7":
             menu_launch(data)
         elif choice == "0":
             print("  Выход.\n")
