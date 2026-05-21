@@ -61,9 +61,7 @@ grep -v "alias oxysync=" "$SHELL_RC" > "$SHELL_RC.tmp" 2>/dev/null && mv "$SHELL
 echo "alias oxysync='python $LAUNCHER'" >> "$SHELL_RC"
 
 echo ""
-echo "  Готово! Выполни:"
+echo "  Установка завершена. Запускаю OxySync..."
 echo ""
-echo "    source $SHELL_RC"
-echo ""
-echo "  Затем запускай: oxysync"
-echo ""
+
+python "$LAUNCHER"
