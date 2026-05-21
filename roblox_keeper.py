@@ -24,6 +24,11 @@ EXECUTORS = {
     "4": {"name": "Arceus X", "path": "/sdcard/Arceus X/autoexec/"},
 }
 
+SOURCES = {
+    "1": {"name": "VegaX",       "type": "gdrive", "id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx", "pattern": "Vegax{slot}.apk"},
+    "2": {"name": "Lunex Delta", "type": "gofile", "id": "k6sf3D",                             "pattern": "Lunex Delta {slot}.apk"},
+}
+
 DEFAULT_PACKAGES = {
     str(i): f"com.roblox.client{'' if i == 1 else i}"
     for i in range(1, MAX_SLOTS + 1)
@@ -199,6 +204,71 @@ def download_gdrive(file_id: str, dest: str, label: str) -> bool:
         print(f"\n    Ошибка: {e}")
         return False
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Gofile
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def gofile_guest_token() -> str | None:
+    try:
+        r = requests.post("https://api.gofile.io/accounts", timeout=10)
+        if r.status_code == 200:
+            return r.json().get("data", {}).get("token")
+    except Exception:
+        pass
+    return None
+
+def list_gofile_folder(content_id: str) -> dict:
+    """Возвращает {filename: (link, token)} для файлов в публичной папке gofile."""
+    token = gofile_guest_token()
+    if not token:
+        return {}
+    try:
+        r = requests.get(
+            f"https://api.gofile.io/contents/{content_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"wt": "4fd6sg89d7s6", "cache": "true"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return {}
+        files = {}
+        for child in r.json().get("data", {}).get("children", {}).values():
+            if child.get("type") == "file":
+                files[child["name"]] = (child["link"], token)
+        return files
+    except Exception:
+        return {}
+
+def download_gofile(link: str, token: str, dest: str, label: str) -> bool:
+    try:
+        r = requests.get(
+            link,
+            headers={"Cookie": f"accountToken={token}"},
+            stream=True, timeout=120,
+        )
+        if r.status_code != 200:
+            print(f"    HTTP {r.status_code}")
+            return False
+        total = int(r.headers.get("content-length", 0))
+        done  = 0
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as f:
+            for chunk in r.iter_content(8192):
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    filled = int(done / total * 30)
+                    bar    = "█" * filled + "░" * (30 - filled)
+                    print(
+                        f"\r    {label}: [{bar}] {done/1024/1024:.1f}/{total/1024/1024:.1f} MB",
+                        end="", flush=True,
+                    )
+        print()
+        return True
+    except Exception as e:
+        print(f"\n    Ошибка: {e}")
+        return False
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Android utilities
@@ -437,15 +507,20 @@ def menu_install_clones(data: dict, reinstall: bool = False):
     title = "Обновление клонов" if reinstall else "Установка клонов"
     print(f"\n[ {title} ]\n")
 
-    # Google Drive folder
-    folder_id = data.get("drive_folder_id", "")
-    if not folder_id:
-        print("  Ошибка: папка Google Drive не задана.\n")
+    # Выбор источника
+    print("  Выбери источник:")
+    for k, v in SOURCES.items():
+        print(f"    {k}. {v['name']}")
+    src_key = input("  Номер: ").strip()
+    if src_key not in SOURCES:
+        print("  Неверный выбор.\n")
         return
+    source = SOURCES[src_key]
+    print()
 
     # Executor
     if not data.get("executor"):
-        print("\n  Выбери инжектор:")
+        print("  Выбери инжектор:")
         for k, v in EXECUTORS.items():
             print(f"    {k}. {v['name']}")
         ch = input("  Номер: ").strip()
@@ -462,34 +537,42 @@ def menu_install_clones(data: dict, reinstall: bool = False):
 
     packages = data.get("packages", DEFAULT_PACKAGES)
 
-    # Получаем список файлов в папке
-    print("  Получаю список файлов из Google Drive...", end=" ", flush=True)
-    drive_files = list_drive_folder(folder_id)
-    if drive_files:
-        print(f"найдено {len(drive_files)} файл(ов)")
+    # Получаем список файлов
+    if source["type"] == "gdrive":
+        print("  Получаю список файлов из Google Drive...", end=" ", flush=True)
+        remote_files = {name: ("gdrive", fid) for name, fid in list_drive_folder(source["id"]).items()}
     else:
-        print("не удалось получить список файлов")
-        print("  Убедись что папка публичная (доступ: 'Всем у кого есть ссылка').\n")
+        print("  Получаю список файлов из Gofile...", end=" ", flush=True)
+        remote_files = {name: ("gofile", link, token) for name, (link, token) in list_gofile_folder(source["id"]).items()}
+
+    if remote_files:
+        print(f"найдено {len(remote_files)} файл(ов)")
+    else:
+        print("не удалось получить список файлов\n")
         return
     print()
 
     for slot in range(1, count + 1):
         pkg      = packages.get(str(slot), DEFAULT_PACKAGES[str(slot)])
-        apk_name = f"Vegax{slot}.apk"
+        apk_name = source["pattern"].format(slot=slot)
         apk_path = APK_DIR + apk_name
 
         if not reinstall and is_package_installed(pkg):
             print(f"  Слот {slot}: уже установлен, пропускаю.")
             continue
 
-        if apk_name not in drive_files:
-            print(f"  Слот {slot}: файл {apk_name} не найден в папке, пропускаю.")
+        if apk_name not in remote_files:
+            print(f"  Слот {slot}: файл {apk_name} не найден, пропускаю.")
             continue
 
         print(f"  Слот {slot}:")
-        file_id = drive_files[apk_name]
+        entry = remote_files[apk_name]
+        if entry[0] == "gdrive":
+            ok = download_gdrive(entry[1], apk_path, "    Загрузка")
+        else:
+            ok = download_gofile(entry[1], entry[2], apk_path, "    Загрузка")
 
-        if not download_gdrive(file_id, apk_path, "    Загрузка"):
+        if not ok:
             print(f"    Пропускаю слот {slot}.\n")
             continue
 
