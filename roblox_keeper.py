@@ -10,7 +10,7 @@ import re
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "1.7"
+VERSION           = "1.8"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -27,8 +27,7 @@ EXECUTORS = {
 }
 
 SOURCES = {
-    "1": {"name": "VegaX",       "type": "gdrive", "id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx", "pattern": "Vegax{slot}.apk"},
-    "2": {"name": "Lunex Delta", "type": "gofile", "id": "k6sf3D",                             "pattern": "Lunex Delta {slot}.apk"},
+    "1": {"name": "VegaX", "type": "gdrive", "id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx", "pattern": "Vegax{slot}.apk"},
 }
 
 DEFAULT_PACKAGES = {
@@ -395,6 +394,9 @@ def install_apk_root(apk_path: str) -> bool:
 def uninstall_root(package: str):
     _su(f"pm uninstall {package}")
 
+def force_stop(package: str):
+    _su(f"am force-stop {package}")
+
 def is_heartbeat_alive(slot: int) -> bool:
     try:
         with open(f"{HEARTBEAT_DIR}hb_{slot}.txt") as f:
@@ -559,16 +561,7 @@ def menu_install_clones(data: dict, reinstall: bool = False):
     title = "Обновление клонов" if reinstall else "Установка клонов"
     print(f"\n[ {title} ]\n")
 
-    # Выбор источника
-    print("  Выбери источник:")
-    for k, v in SOURCES.items():
-        print(f"    {k}. {v['name']}")
-    src_key = input("  Номер: ").strip()
-    if src_key not in SOURCES:
-        print("  Неверный выбор.\n")
-        return
-    source = SOURCES[src_key]
-    print()
+    source = SOURCES["1"]
 
     # Executor
     if not data.get("executor"):
@@ -648,6 +641,11 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         print(f"    Устанавливаю...", end=" ", flush=True)
         if install_apk_root(apk_path):
             print("Готово ✓ (сессия сохранена)")
+            print(f"    Инициализация (12 сек)...", end=" ", flush=True)
+            launch_clone(pkg)
+            time.sleep(12)
+            force_stop(pkg)
+            print("✓")
         else:
             print("Ошибка установки!")
 
