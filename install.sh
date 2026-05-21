@@ -23,15 +23,12 @@ fi
 
 # ── 2. Python библиотеки ─────────────────────────────────────────────────────
 echo "  [2/3] Установка библиотек..."
-TMP_REQ="${TMPDIR:-/tmp}/oxysync_req.txt"
-curl -sSL "$REQ_URL" -o "$TMP_REQ" 2>/dev/null || echo "requests>=2.28.0,<3.0.0" > "$TMP_REQ"
-pip install -r "$TMP_REQ" -q
+pip install requests -q
 if [ $? -ne 0 ]; then
     echo "  Ошибка: не удалось установить библиотеки."
     echo "  Попробуй вручную: pip install requests"
     exit 1
 fi
-rm -f "$TMP_REQ"
 
 # ── 3. Лаунчер ───────────────────────────────────────────────────────────────
 echo "  [3/3] Установка OxySync..."
