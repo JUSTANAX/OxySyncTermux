@@ -254,24 +254,27 @@ def launch_clone(package: str, place_id: str = None):
             capture_output=True
         )
 
+def _su(cmd: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["su", "-c", cmd],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL
+    )
+
 def set_play_protect(enabled: bool):
     val = "1" if enabled else "0"
-    subprocess.run(["su", "-c", f"settings put global package_verifier_enable {val}"], capture_output=True)
-    subprocess.run(["su", "-c", f"settings put global verifier_verify_adb_installs {val}"], capture_output=True)
+    _su(f"settings put global package_verifier_enable {val}")
+    _su(f"settings put global verifier_verify_adb_installs {val}")
 
 def install_apk_root(apk_path: str) -> bool:
     set_play_protect(False)
     try:
-        r = subprocess.run(
-            ["su", "-c", f"pm install -r \"{apk_path}\""],
-            capture_output=True, text=True
-        )
+        r = _su(f"pm install -r \"{apk_path}\"")
         return "success" in r.stdout.lower()
     finally:
         set_play_protect(True)
 
 def uninstall_root(package: str):
-    subprocess.run(["su", "-c", f"pm uninstall {package}"], capture_output=True)
+    _su(f"pm uninstall {package}")
 
 def is_heartbeat_alive(slot: int) -> bool:
     try:
