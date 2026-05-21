@@ -10,7 +10,7 @@ import re
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "1.6"
+VERSION           = "1.7"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -229,15 +229,25 @@ def gofile_guest_token() -> str | None:
     return None
 
 def gofile_wt() -> str:
-    """Получает актуальный websiteToken со страницы gofile."""
+    """Получает актуальный websiteToken с сайта gofile."""
+    UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+    WT_PATTERNS = [
+        r'"websiteToken"\s*:\s*"([a-zA-Z0-9]+)"',
+        r'websiteToken\s*[=:]\s*["\']([a-zA-Z0-9]+)["\']',
+        r'wt\s*[=:]\s*"([a-zA-Z0-9]{10,})"',
+    ]
     try:
-        r = requests.get("https://gofile.io/", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        for js_src in re.findall(r'src="(/dist/js/[^"]+\.js)"', r.text)[:5]:
+        html = requests.get("https://gofile.io/", headers={"User-Agent": UA}, timeout=15).text
+        js_srcs = re.findall(r'src=["\']([^"\']+\.js[^"\']*)["\']', html)
+        for js_src in js_srcs[:10]:
+            if not js_src.startswith("http"):
+                js_src = "https://gofile.io" + (js_src if js_src.startswith("/") else "/" + js_src)
             try:
-                jr = requests.get(f"https://gofile.io{js_src}", timeout=10)
-                m  = re.search(r'websiteToken\s*[=:]\s*["\']([a-zA-Z0-9]+)["\']', jr.text)
-                if m:
-                    return m.group(1)
+                js = requests.get(js_src, headers={"User-Agent": UA}, timeout=10).text
+                for pat in WT_PATTERNS:
+                    m = re.search(pat, js)
+                    if m and len(m.group(1)) >= 8:
+                        return m.group(1)
             except Exception:
                 continue
     except Exception:
@@ -247,12 +257,10 @@ def gofile_wt() -> str:
 def list_gofile_folder(content_id: str) -> dict:
     """Возвращает {filename: (link, token)} для файлов в публичной папке gofile."""
     token = gofile_guest_token()
-    print(f"    Token: {token}")
     if not token:
         print("    Не удалось получить токен Gofile")
         return {}
     wt = gofile_wt()
-    print(f"    wt: {wt}")
     try:
         r = requests.get(
             f"https://api.gofile.io/contents/{content_id}",
@@ -264,8 +272,8 @@ def list_gofile_folder(content_id: str) -> dict:
             params={"wt": wt},
             timeout=15,
         )
-        print(f"    HTTP {r.status_code}: {r.text[:300]}")
         if r.status_code != 200:
+            print(f"    Gofile API: HTTP {r.status_code} (wt={wt})")
             return {}
         d = r.json()
         if d.get("status") != "ok":
