@@ -528,19 +528,28 @@ def menu_install_clones(data: dict, reinstall: bool = False):
 #  Menu 2 — Login
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def installed_slots(data: dict) -> list[int]:
+    packages = data.get("packages", DEFAULT_PACKAGES)
+    return [i for i in range(1, MAX_SLOTS + 1) if is_package_installed(packages.get(str(i), DEFAULT_PACKAGES[str(i)]))]
+
 def menu_login(data: dict):
     print("\n[ Вход в аккаунты ]\n")
     accounts = data.setdefault("accounts", {str(i): None for i in range(1, MAX_SLOTS + 1)})
 
-    print("  Текущие аккаунты:")
-    for i in range(1, MAX_SLOTS + 1):
+    slots = installed_slots(data)
+    if not slots:
+        print("  Нет установленных клонов. Сначала установи клоны (пункт 1).\n")
+        return
+
+    print("  Установленные слоты:")
+    for i in slots:
         acc = accounts.get(str(i))
         print(f"    Слот {i}: {acc['username'] if acc else '—'}")
     print()
 
     try:
-        slot = int(input(f"  Слот (1-{MAX_SLOTS}): ").strip())
-        if not 1 <= slot <= MAX_SLOTS:
+        slot = int(input(f"  Слот ({slots[0]}-{slots[-1]}): ").strip())
+        if slot not in slots:
             raise ValueError
     except ValueError:
         print("  Неверный слот.\n")
@@ -691,9 +700,11 @@ def menu_account_settings(data: dict):
     choice = input("  Выбор: ").strip()
     print()
 
+    active_list = sorted(active.keys(), key=int)
+
     if choice == "1":
         try:
-            slot = int(input(f"  Слот (1-{MAX_SLOTS}): ").strip())
+            slot = int(input(f"  Слот: ").strip())
             if str(slot) not in active:
                 print("  Слот не найден.\n")
                 return
@@ -717,7 +728,7 @@ def menu_account_settings(data: dict):
 
     elif choice == "2":
         try:
-            slot = int(input(f"  Слот (1-{MAX_SLOTS}): ").strip())
+            slot = int(input(f"  Слот: ").strip())
             if str(slot) not in active:
                 print("  Слот не найден.\n")
                 return
@@ -758,7 +769,7 @@ def menu_scripts(data: dict):
 
     if choice == "1":
         try:
-            slot = int(input(f"\n  Слот (1-{MAX_SLOTS}): ").strip())
+            slot = int(input(f"\n  Слот: ").strip())
             if str(slot) not in active:
                 print("  Слот не найден или пустой.\n")
                 return
@@ -798,7 +809,7 @@ def menu_scripts(data: dict):
 
     elif choice == "2":
         try:
-            slot = int(input(f"\n  Слот (1-{MAX_SLOTS}): ").strip())
+            slot = int(input(f"\n  Слот: ").strip())
             if str(slot) not in active:
                 print("  Слот не найден.\n")
                 return
