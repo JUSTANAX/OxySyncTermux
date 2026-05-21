@@ -10,7 +10,7 @@ import re
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "2.1"
+VERSION           = "2.2"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -500,6 +500,10 @@ def _row(num, label):
 def _bot():
     print(f"  {CY}└{'─' * W}┘{RS}")
 
+def _desc(text):
+    pad = " " * (W - 5 - len(text))
+    print(f"  {CY}│{RS}     {DM}{text}{pad}{CY}│{RS}")
+
 def banner():
     title   = "OxySync — Roblox Keeper"
     ver     = f"v{VERSION}"
@@ -514,19 +518,25 @@ def banner():
 def print_menu():
     _top("КЛОНЫ")
     _row("1", "Установить клоны")
+    _desc("Скачать и установить клоны Roblox")
     _row("2", "Обновить клоны")
+    _desc("Переустановить клоны, сохранив сессию")
     _bot()
     print()
 
     _top("АККАУНТЫ")
     _row("3", "Войти в аккаунт")
+    _desc("Привязать Roblox аккаунт к слоту")
     _row("4", "Настройка аккаунтов")
+    _desc("Привязать игру к слоту")
     _bot()
     print()
 
     _top("ИГРА")
     _row("5", "Мульти-скрипты")
+    _desc("Назначить Lua скрипт каждому слоту")
     _row("6", "Запустить игры")
+    _desc("Запустить все аккаунты и следить за ними")
     _bot()
     print()
 
