@@ -5,12 +5,13 @@ import sys
 import json
 import subprocess
 import re
+import sqlite3
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "2.3"
+VERSION           = "2.4"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -389,6 +390,47 @@ def uninstall_root(package: str):
 def force_stop(package: str):
     _su(f"am force-stop {package}")
 
+def inject_cookie(package: str, cookie: str) -> bool:
+    """Записывает .ROBLOSECURITY в WebView SQLite базу клона."""
+    db_candidates = [
+        f"/data/data/{package}/app_webview/Default/Cookies",
+        f"/data/data/{package}/app_webview/Cookies",
+    ]
+    tmp = "/sdcard/OxySync/tmp_cookies"
+
+    for db_path in db_candidates:
+        if "ok" not in _su(f"[ -f '{db_path}' ] && echo ok").stdout:
+            continue
+        if _su(f"cp '{db_path}' '{tmp}' && chmod 666 '{tmp}'").returncode != 0:
+            continue
+        try:
+            conn = sqlite3.connect(tmp)
+            cur  = conn.cursor()
+            cur.execute(
+                "DELETE FROM cookies WHERE host_key='.roblox.com' AND name='.ROBLOSECURITY'"
+            )
+            cur.execute(
+                """INSERT INTO cookies
+                   (host_key, name, value, path, expires_utc, is_secure, is_httponly,
+                    last_access_utc, has_expires, is_persistent, priority,
+                    encrypted_value, samesite, source_scheme)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ('.roblox.com', '.ROBLOSECURITY', cookie, '/',
+                 13000000000000000, 1, 1, 13000000000000000, 1, 1, 1, b'', -1, 2)
+            )
+            conn.commit()
+            conn.close()
+            owner = _su(f"stat -c '%u:%g' /data/data/{package}").stdout.strip()
+            _su(f"cp '{tmp}' '{db_path}'")
+            if owner:
+                _su(f"chown {owner} '{db_path}'")
+            _su(f"chmod 600 '{db_path}' && rm -f '{tmp}'")
+            return True
+        except Exception:
+            _su(f"rm -f '{tmp}'")
+            continue
+    return False
+
 def is_heartbeat_alive(slot: int) -> bool:
     try:
         with open(f"{HEARTBEAT_DIR}hb_{slot}.txt") as f:
@@ -705,7 +747,20 @@ def menu_login(data: dict):
     user_id  = info.get("id", 0)
     accounts[str(slot)] = {"cookie": cookie, "username": username, "user_id": user_id}
     save_data(data)
-    print(f"\n  Слот {slot} → {username} (ID: {user_id}) ✓\n")
+    print(f"\n  Слот {slot} → {username} (ID: {user_id}) ✓")
+
+    pkg = data.get("packages", DEFAULT_PACKAGES).get(str(slot), DEFAULT_PACKAGES[str(slot)])
+    if is_package_installed(pkg):
+        print(f"  Вхожу в клон...", end=" ", flush=True)
+        force_stop(pkg)
+        time.sleep(1)
+        if inject_cookie(pkg, cookie):
+            print("✓")
+        else:
+            print("не удалось — войди в клон вручную")
+    else:
+        print(f"  Клон не установлен — войди вручную после установки")
+    print()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Menu 3 — Launch + Monitor
