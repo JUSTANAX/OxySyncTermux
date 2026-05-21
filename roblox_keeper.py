@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "2.5"
+VERSION           = "2.6"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -421,11 +421,12 @@ def inject_cookie(package: str, cookie: str) -> bool:
             )
 
             # Базовые поля — есть всегда
-            fields = ["host_key", "name", "value", "path", "expires_utc",
+            fields = ["creation_utc", "host_key", "name", "value", "path", "expires_utc",
                       "is_secure", "is_httponly", "last_access_utc",
                       "has_expires", "is_persistent", "priority", "encrypted_value"]
-            values = ['.roblox.com', '.ROBLOSECURITY', cookie, '/',
-                      13000000000000000, 1, 1, 13000000000000000, 1, 1, 1, b'']
+            now    = int(time.time() * 1_000_000) + 11644473600 * 1_000_000
+            values = [now, '.roblox.com', '.ROBLOSECURITY', cookie, '/',
+                      13000000000000000, 1, 1, now, 1, 1, 1, b'']
 
             # Опциональные поля (зависят от версии WebView)
             for col, val in [("samesite", -1), ("source_scheme", 2), ("source_port", 443)]:
