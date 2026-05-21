@@ -36,15 +36,15 @@ mkdir -p "$INSTALL_DIR"
 chmod 700 "$INSTALL_DIR"
 
 cat > "$LAUNCHER" << PYEOF
-import requests, sys
+import requests, sys, base64, json
 
-import time
-URL = "$SCRIPT_URL"
+API_URL = "https://api.github.com/repos/JUSTANAX/OxySyncTermux/contents/roblox_keeper.py"
 
 try:
-    r = requests.get(URL, params={"_": int(time.time())}, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"}, timeout=15)
+    r = requests.get(API_URL, headers={"Accept": "application/vnd.github.v3+json"}, timeout=15)
     r.raise_for_status()
-    exec(compile(r.text, "<oxysync>", "exec"), {"__name__": "__main__"})
+    code = base64.b64decode(r.json()["content"]).decode()
+    exec(compile(code, "<oxysync>", "exec"), {"__name__": "__main__"})
 except requests.exceptions.ConnectionError:
     print("  Нет интернета. Проверь соединение.")
     sys.exit(1)
