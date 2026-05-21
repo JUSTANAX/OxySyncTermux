@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "2.4"
+VERSION           = "2.5"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -392,41 +392,63 @@ def force_stop(package: str):
 
 def inject_cookie(package: str, cookie: str) -> bool:
     """Записывает .ROBLOSECURITY в WebView SQLite базу клона."""
-    db_candidates = [
-        f"/data/data/{package}/app_webview/Default/Cookies",
-        f"/data/data/{package}/app_webview/Cookies",
-    ]
+    # Ищем файл Cookies рекурсивно
+    find = _su(f"find /data/data/{package}/app_webview -name 'Cookies' 2>/dev/null")
+    db_paths = [p.strip() for p in find.stdout.splitlines() if p.strip()]
+
+    if not db_paths:
+        print(f"    База не найдена в app_webview")
+        ls = _su(f"ls /data/data/{package}/")
+        print(f"    Содержимое: {ls.stdout.strip()}")
+        return False
+
     tmp = "/sdcard/OxySync/tmp_cookies"
 
-    for db_path in db_candidates:
-        if "ok" not in _su(f"[ -f '{db_path}' ] && echo ok").stdout:
-            continue
+    for db_path in db_paths:
         if _su(f"cp '{db_path}' '{tmp}' && chmod 666 '{tmp}'").returncode != 0:
+            print(f"    Не удалось скопировать: {db_path}")
             continue
         try:
             conn = sqlite3.connect(tmp)
             cur  = conn.cursor()
+
+            # Определяем схему таблицы
+            cur.execute("PRAGMA table_info(cookies)")
+            columns = {row[1] for row in cur.fetchall()}
+
             cur.execute(
                 "DELETE FROM cookies WHERE host_key='.roblox.com' AND name='.ROBLOSECURITY'"
             )
+
+            # Базовые поля — есть всегда
+            fields = ["host_key", "name", "value", "path", "expires_utc",
+                      "is_secure", "is_httponly", "last_access_utc",
+                      "has_expires", "is_persistent", "priority", "encrypted_value"]
+            values = ['.roblox.com', '.ROBLOSECURITY', cookie, '/',
+                      13000000000000000, 1, 1, 13000000000000000, 1, 1, 1, b'']
+
+            # Опциональные поля (зависят от версии WebView)
+            for col, val in [("samesite", -1), ("source_scheme", 2), ("source_port", 443)]:
+                if col in columns:
+                    fields.append(col)
+                    values.append(val)
+
+            placeholders = ",".join(["?"] * len(fields))
             cur.execute(
-                """INSERT INTO cookies
-                   (host_key, name, value, path, expires_utc, is_secure, is_httponly,
-                    last_access_utc, has_expires, is_persistent, priority,
-                    encrypted_value, samesite, source_scheme)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                ('.roblox.com', '.ROBLOSECURITY', cookie, '/',
-                 13000000000000000, 1, 1, 13000000000000000, 1, 1, 1, b'', -1, 2)
+                f"INSERT INTO cookies ({','.join(fields)}) VALUES ({placeholders})",
+                values
             )
             conn.commit()
             conn.close()
+
             owner = _su(f"stat -c '%u:%g' /data/data/{package}").stdout.strip()
             _su(f"cp '{tmp}' '{db_path}'")
             if owner:
                 _su(f"chown {owner} '{db_path}'")
             _su(f"chmod 600 '{db_path}' && rm -f '{tmp}'")
             return True
-        except Exception:
+        except Exception as e:
+            print(f"    SQLite ошибка: {e}")
             _su(f"rm -f '{tmp}'")
             continue
     return False
