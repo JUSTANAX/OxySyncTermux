@@ -65,4 +65,4 @@ echo ""
 echo "  Установка завершена. Запускаю OxySync..."
 echo ""
 
-python "$LAUNCHER"
+python "$LAUNCHER" "$@"
