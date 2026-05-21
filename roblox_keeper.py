@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "2.7"
+VERSION           = "2.8"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
@@ -389,6 +389,25 @@ def uninstall_root(package: str):
 
 def force_stop(package: str):
     _su(f"am force-stop {package}")
+
+def get_auth_ticket(session: requests.Session) -> str | None:
+    try:
+        session.headers.update({"X-CSRF-TOKEN": get_csrf(session)})
+        r = session.post("https://auth.roblox.com/v1/authentication-ticket", timeout=10)
+        return r.headers.get("rbx-authentication-ticket")
+    except Exception:
+        return None
+
+def login_clone(package: str, cookie: str) -> bool:
+    """Логинит клон через официальный auth ticket Roblox."""
+    session = make_session(cookie)
+    ticket  = get_auth_ticket(session)
+    if not ticket:
+        return False
+    force_stop(package)
+    time.sleep(1)
+    _su(f"am start -a android.intent.action.VIEW -d 'roblox://authenticate?ticket={ticket}&returnToApp=1' -p {package}")
+    return True
 
 def inject_cookie(package: str, cookie: str) -> bool:
     """Записывает .ROBLOSECURITY в WebView SQLite базу клона."""
@@ -780,10 +799,10 @@ def menu_login(data: dict):
     pkg = data.get("packages", DEFAULT_PACKAGES).get(str(slot), DEFAULT_PACKAGES[str(slot)])
     if is_package_installed(pkg):
         print(f"  Вхожу в клон...", end=" ", flush=True)
-        force_stop(pkg)
-        time.sleep(1)
-        if inject_cookie(pkg, cookie):
+        if login_clone(pkg, cookie):
             print("✓")
+        elif inject_cookie(pkg, cookie):
+            print("✓ (SQLite)")
         else:
             print("не удалось — войди в клон вручную")
     else:
