@@ -365,19 +365,53 @@ def write_lua(executor_path: str, accounts: dict):
 #  Display
 # ═══════════════════════════════════════════════════════════════════════════════
 
+CY = "\033[1;96m"
+YL = "\033[1;93m"
+GR = "\033[1;92m"
+RS = "\033[0m"
+DM = "\033[2m"
+
+W = 34  # inner box width
+
+def _top(title):
+    fill = "─" * (W - 3 - len(title))
+    print(f"  {CY}┌─ {title} {fill}┐{RS}")
+
+def _row(num, label):
+    pad = " " * (W - 5 - len(label))
+    print(f"  {CY}│{RS}  {YL}{num}{RS}  {label}{pad}{CY}│{RS}")
+
+def _bot():
+    print(f"  {CY}└{'─' * W}┘{RS}")
+
 def banner():
-    print("\n" + "═" * 40)
-    print("       OxySync — Roblox Keeper")
-    print("═" * 40 + "\n")
+    title = "OxySync — Roblox Keeper"
+    pad_l = (W - len(title)) // 2
+    pad_r = W - len(title) - pad_l
+    print(f"\n{CY}  ╔{'═' * W}╗{RS}")
+    print(f"{CY}  ║{RS}{' ' * pad_l}{GR}{title}{RS}{' ' * pad_r}{CY}║{RS}")
+    print(f"{CY}  ╚{'═' * W}╝{RS}\n")
 
 def print_menu():
-    print("  1. Установить клоны")
-    print("  2. Войти в аккаунты")
-    print("  3. Настройка аккаунтов")
-    print("  4. Мульти-скрипты")
-    print("  5. Запустить игры")
-    print("  6. Обновить клоны")
-    print("  7. Выход\n")
+    _top("КЛОНЫ")
+    _row("1", "Установить клоны")
+    _row("2", "Обновить клоны")
+    _bot()
+    print()
+
+    _top("АККАУНТЫ")
+    _row("3", "Войти в аккаунт")
+    _row("4", "Настройка аккаунтов")
+    _bot()
+    print()
+
+    _top("ИГРА")
+    _row("5", "Мульти-скрипты")
+    _row("6", "Запустить игры")
+    _bot()
+    print()
+
+    print(f"  {DM}0  Выход{RS}\n")
 
 def status_label(status: str) -> str:
     return {"ingame": "В игре", "online": "Онлайн", "offline": "Офлайн", "studio": "Studio"}.get(status, status)
@@ -789,26 +823,26 @@ def main():
 
     while True:
         print_menu()
-        choice = input("  Выбор: ").strip()
+        choice = input(f"  {YL}›{RS} ").strip()
         print()
 
         if choice == "1":
             menu_install_clones(data)
         elif choice == "2":
-            menu_login(data)
-        elif choice == "3":
-            menu_account_settings(data)
-        elif choice == "4":
-            menu_scripts(data)
-        elif choice == "5":
-            menu_launch(data)
-        elif choice == "6":
             menu_install_clones(data, reinstall=True)
-        elif choice == "7":
+        elif choice == "3":
+            menu_login(data)
+        elif choice == "4":
+            menu_account_settings(data)
+        elif choice == "5":
+            menu_scripts(data)
+        elif choice == "6":
+            menu_launch(data)
+        elif choice == "0":
             print("  Выход.\n")
             break
         else:
-            print("  Неверный выбор.\n")
+            print(f"  {DM}Неверный выбор.{RS}\n")
 
 if __name__ == "__main__":
     try:
