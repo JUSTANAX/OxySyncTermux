@@ -247,10 +247,12 @@ def gofile_wt() -> str:
 def list_gofile_folder(content_id: str) -> dict:
     """Возвращает {filename: (link, token)} для файлов в публичной папке gofile."""
     token = gofile_guest_token()
+    print(f"    Token: {token}")
     if not token:
         print("    Не удалось получить токен Gofile")
         return {}
     wt = gofile_wt()
+    print(f"    wt: {wt}")
     try:
         r = requests.get(
             f"https://api.gofile.io/contents/{content_id}",
@@ -262,12 +264,11 @@ def list_gofile_folder(content_id: str) -> dict:
             params={"wt": wt},
             timeout=15,
         )
+        print(f"    HTTP {r.status_code}: {r.text[:300]}")
         if r.status_code != 200:
-            print(f"    Gofile API: HTTP {r.status_code}")
             return {}
         d = r.json()
         if d.get("status") != "ok":
-            print(f"    Gofile API: {d.get('status')} — {d.get('data', '')}")
             return {}
         files = {}
         for child in d.get("data", {}).get("children", {}).values():
