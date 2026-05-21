@@ -10,7 +10,7 @@ import re
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "1.5"
+VERSION           = "1.6"
 
 DATA_FILE         = "/sdcard/OxySync/data.json"
 APK_DIR           = "/sdcard/OxySync/apks/"
