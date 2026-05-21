@@ -215,7 +215,9 @@ def gofile_guest_token() -> str | None:
         ("https://api.gofile.io/accounts",       "post"),
     ]:
         try:
-            r = (requests.get if method == "get" else requests.post)(url, timeout=10)
+            r = (requests.get if method == "get" else requests.post)(
+                url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10
+            )
             if r.status_code == 200:
                 d = r.json()
                 if d.get("status") == "ok":
@@ -224,17 +226,38 @@ def gofile_guest_token() -> str | None:
             continue
     return None
 
+def gofile_wt() -> str:
+    """Получает актуальный websiteToken со страницы gofile."""
+    try:
+        r = requests.get("https://gofile.io/", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        for js_src in re.findall(r'src="(/dist/js/[^"]+\.js)"', r.text)[:5]:
+            try:
+                jr = requests.get(f"https://gofile.io{js_src}", timeout=10)
+                m  = re.search(r'websiteToken\s*[=:]\s*["\']([a-zA-Z0-9]+)["\']', jr.text)
+                if m:
+                    return m.group(1)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return "4fd6sg89d7s6"
+
 def list_gofile_folder(content_id: str) -> dict:
     """Возвращает {filename: (link, token)} для файлов в публичной папке gofile."""
     token = gofile_guest_token()
     if not token:
         print("    Не удалось получить токен Gofile")
         return {}
+    wt = gofile_wt()
     try:
         r = requests.get(
             f"https://api.gofile.io/contents/{content_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"wt": "4fd6sg89d7s6"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Cookie": f"accountToken={token}",
+                "User-Agent": "Mozilla/5.0",
+            },
+            params={"wt": wt},
             timeout=15,
         )
         if r.status_code != 200:
