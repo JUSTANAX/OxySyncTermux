@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.25"
+VERSION           = "3.26"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -516,6 +516,53 @@ def _create_webview_db(path: str):
     conn.commit()
     conn.close()
 
+def extract_cookie(package: str) -> str | None:
+    """Читает .ROBLOSECURITY из WebView SQLite базы клона."""
+    tmp     = "/sdcard/OxySync/tmp_read_cookies"
+    tmp_wal = "/sdcard/OxySync/tmp_read_cookies-wal"
+
+    internal_pkg = package.replace("client", "clien")
+    data_dir     = get_package_data_dir(package)
+    candidates   = list(dict.fromkeys([
+        f"/data/data/{internal_pkg}",
+        f"/data/user/0/{internal_pkg}",
+        data_dir,
+        f"/data/data/{package}",
+        f"/data/user/0/{package}",
+    ]))
+
+    found = None
+    for cand in candidates:
+        r = _su(f"find {cand}/app_webview -name 'Cookies' 2>/dev/null")
+        hits = [p.strip() for p in r.stdout.splitlines() if p.strip()]
+        if hits:
+            found = hits[0]
+            break
+
+    if not found:
+        return None
+
+    _su(f"cp '{found}-wal' '{tmp_wal}' 2>/dev/null; chmod 666 '{tmp_wal}' 2>/dev/null")
+    if _su(f"cp '{found}' '{tmp}' && chmod 666 '{tmp}'").returncode != 0:
+        return None
+
+    try:
+        conn = sqlite3.connect(tmp)
+        cur  = conn.cursor()
+        cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        cur.execute(
+            "SELECT value FROM cookies "
+            "WHERE host_key='.roblox.com' AND name='.ROBLOSECURITY' LIMIT 1"
+        )
+        row = cur.fetchone()
+        conn.close()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
+    finally:
+        _su(f"rm -f '{tmp}' '{tmp_wal}'")
+
+
 def inject_cookie(package: str, cookie: str) -> bool:
     """Записывает .ROBLOSECURITY напрямую в WebView SQLite базу клона (без запуска приложения)."""
     force_stop(package)
@@ -995,12 +1042,12 @@ def menu_install_clones(data: dict, reinstall: bool = False):
                     else:
                         print("не удалось — войди через пункт 4")
                 else:
+                    # Пробуем достать куки из самого клона
                     print(f"    Аккаунт для слота {slot} не найден.")
-                    print(f"    Введи куки чтобы войти сейчас (или Enter — пропустить):")
-                    cookie = input(f"    Куки: ").strip()
+                    print(f"    Ищу куки в клоне...", end=" ", flush=True)
+                    cookie = extract_cookie(pkg)
                     if cookie:
-                        if cookie.startswith(".ROBLOSECURITY="):
-                            cookie = cookie.split("=", 1)[1]
+                        print("найдено")
                         info = get_account_info(make_session(cookie))
                         if info:
                             username = info.get("name", "Unknown")
@@ -1008,15 +1055,36 @@ def menu_install_clones(data: dict, reinstall: bool = False):
                             data["accounts"][str(slot)] = {
                                 "cookie": cookie, "username": username, "user_id": user_id
                             }
-                            print(f"    {username} — вхожу...", end=" ", flush=True)
-                            if inject_cookie(pkg, cookie):
-                                print("✓")
-                            elif login_clone(pkg, cookie):
-                                print("✓ (auth ticket)")
-                            else:
-                                print("не удалось — войди через пункт 4")
+                            print(f"    {username} ✓")
                         else:
-                            print(f"    Неверный куки, пропускаю.")
+                            print(f"    Куки истёк — введи новый через пункт 4.")
+                            cookie = None
+                    else:
+                        print("не найдено")
+
+                    # Если не удалось — предлагаем ввести вручную
+                    if not cookie:
+                        print(f"    Введи куки вручную (или Enter — пропустить):")
+                        cookie = input(f"    Куки: ").strip()
+                        if cookie:
+                            if cookie.startswith(".ROBLOSECURITY="):
+                                cookie = cookie.split("=", 1)[1]
+                            info = get_account_info(make_session(cookie))
+                            if info:
+                                username = info.get("name", "Unknown")
+                                user_id  = info.get("id", 0)
+                                data["accounts"][str(slot)] = {
+                                    "cookie": cookie, "username": username, "user_id": user_id
+                                }
+                                print(f"    {username} — вхожу...", end=" ", flush=True)
+                                if inject_cookie(pkg, cookie):
+                                    print("✓")
+                                elif login_clone(pkg, cookie):
+                                    print("✓ (auth ticket)")
+                                else:
+                                    print("не удалось — войди через пункт 4")
+                            else:
+                                print(f"    Неверный куки, пропускаю.")
         else:
             print("Ошибка установки!")
 
