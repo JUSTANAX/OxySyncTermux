@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.27"
+VERSION           = "3.28"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -949,8 +949,11 @@ def menu_install_clones(data: dict, reinstall: bool = False):
             save_data(data)
 
     # Slots
+    print(f"  {YL}⚠ Лимиты клонов по VIP на сервисе:{RS}")
+    print(f"  {DM}  UVIP → 1-2   GVIP → 3-4   SVIP → 6-8{RS}")
+    print(f"  {DM}  Превышение лимита нарушает правила сервиса.{RS}\n")
     try:
-        count = int(input(f"\n  Сколько клонов? (1-{MAX_SLOTS}): ").strip())
+        count = int(input(f"  Сколько клонов? (1-{MAX_SLOTS}): ").strip())
         count = max(1, min(count, MAX_SLOTS))
     except ValueError:
         count = 1
