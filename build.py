@@ -51,5 +51,29 @@ def build():
     print(f"    Исходник : {src_kb:.1f} KB")
     print(f"    Результат: {out_kb:.1f} KB")
 
+    # Достаём версию из исходника
+    version = "unknown"
+    for line in source.splitlines():
+        if line.startswith('VERSION'):
+            version = line.split('"')[1]
+            break
+
+    # Пушим в публичный репо
+    print(f"\n[*] Пушу в публичный репо (v{version})...")
+    import subprocess
+    r = subprocess.run(
+        ["git", "add", "roblox_keeper.py"],
+        cwd=DIST
+    )
+    r = subprocess.run(
+        ["git", "commit", "-m", f"v{version}"],
+        cwd=DIST, capture_output=True, text=True
+    )
+    if "nothing to commit" in r.stdout + r.stderr:
+        print("[!] Изменений нет, пуш пропущен.")
+    else:
+        subprocess.run(["git", "push"], cwd=DIST)
+        print(f"[+] Запушено: v{version}")
+
 if __name__ == "__main__":
     build()
