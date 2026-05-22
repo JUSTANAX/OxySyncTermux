@@ -491,15 +491,18 @@ def inject_cookie(package: str, cookie: str) -> bool:
     force_stop(package)
     time.sleep(1)
 
-    tmp = "/sdcard/OxySync/tmp_cookies"
+    tmp     = "/sdcard/OxySync/tmp_cookies"
+    tmp_wal = "/sdcard/OxySync/tmp_cookies-wal"
 
     # Ищем существующий файл Cookies
-    find    = _su(f"find /data/data/{package}/app_webview -name 'Cookies' 2>/dev/null")
-    found   = [p.strip() for p in find.stdout.splitlines() if p.strip()]
+    find  = _su(f"find /data/data/{package}/app_webview -name 'Cookies' 2>/dev/null")
+    found = [p.strip() for p in find.stdout.splitlines() if p.strip()]
     created = False
 
     if found:
         db_path = found[0]
+        # Копируем DB и WAL вместе чтобы sqlite3 увидел консистентное состояние
+        _su(f"cp '{db_path}-wal' '{tmp_wal}' 2>/dev/null; chmod 666 '{tmp_wal}' 2>/dev/null")
         if _su(f"cp '{db_path}' '{tmp}' && chmod 666 '{tmp}'").returncode != 0:
             print(f"    Не удалось скопировать базу")
             return False
@@ -516,6 +519,10 @@ def inject_cookie(package: str, cookie: str) -> bool:
     try:
         conn = sqlite3.connect(tmp)
         cur  = conn.cursor()
+
+        # Принудительно сбрасываем WAL в основной файл и переключаемся в rollback-режим
+        cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        cur.execute("PRAGMA journal_mode=DELETE")
 
         cur.execute("PRAGMA table_info(cookies)")
         columns = {row[1] for row in cur.fetchall()}
@@ -550,18 +557,32 @@ def inject_cookie(package: str, cookie: str) -> bool:
         conn.close()
 
         owner = _su(f"stat -c '%u:%g' /data/data/{package}").stdout.strip()
+
         if created:
             parent = db_path.rsplit("/", 1)[0]
             _su(f"mkdir -p '{parent}'")
-        _su(f"cp '{tmp}' '{db_path}'")
+            if owner:
+                # Чиним владельца на всю цепочку директорий
+                _su(f"chown {owner} '{parent}' '{parent.rsplit('/', 1)[0]}' 2>/dev/null")
+
+        cp = _su(f"cp '{tmp}' '{db_path}'")
+        if cp.returncode != 0:
+            print(f"    Не удалось скопировать базу в app_webview: {cp.stderr.strip()}")
+            _su(f"rm -f '{tmp}' '{tmp_wal}'")
+            return False
+
         if owner:
             _su(f"chown {owner} '{db_path}'")
+        # Убираем WAL/SHM — база уже в rollback-режиме, они не нужны
         _su(f"rm -f '{db_path}-wal' '{db_path}-shm'")
-        _su(f"chmod 600 '{db_path}' && rm -f '{tmp}'")
+        # Восстанавливаем SELinux контекст (без этого приложение не прочитает файл)
+        _su(f"restorecon '{db_path}' 2>/dev/null || chcon u:object_r:app_data_file:s0 '{db_path}' 2>/dev/null")
+        _su(f"chmod 600 '{db_path}'")
+        _su(f"rm -f '{tmp}' '{tmp_wal}'")
         return True
     except Exception as e:
         print(f"    SQLite ошибка: {e}")
-        _su(f"rm -f '{tmp}'")
+        _su(f"rm -f '{tmp}' '{tmp_wal}'")
         return False
 
 def is_heartbeat_alive(slot: int) -> bool:
