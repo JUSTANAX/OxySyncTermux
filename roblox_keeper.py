@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.24"
+VERSION           = "3.25"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -983,7 +983,7 @@ def menu_install_clones(data: dict, reinstall: bool = False):
             force_stop(pkg)
             print("✓")
 
-            # При переустановке восстанавливаем аккаунт из сохранённых куки
+            # Восстанавливаем или запрашиваем аккаунт после установки
             if reinstall:
                 acc = data.get("accounts", {}).get(str(slot))
                 if acc and acc.get("cookie"):
@@ -994,6 +994,29 @@ def menu_install_clones(data: dict, reinstall: bool = False):
                         print("✓ (auth ticket)")
                     else:
                         print("не удалось — войди через пункт 4")
+                else:
+                    print(f"    Аккаунт для слота {slot} не найден.")
+                    print(f"    Введи куки чтобы войти сейчас (или Enter — пропустить):")
+                    cookie = input(f"    Куки: ").strip()
+                    if cookie:
+                        if cookie.startswith(".ROBLOSECURITY="):
+                            cookie = cookie.split("=", 1)[1]
+                        info = get_account_info(make_session(cookie))
+                        if info:
+                            username = info.get("name", "Unknown")
+                            user_id  = info.get("id", 0)
+                            data["accounts"][str(slot)] = {
+                                "cookie": cookie, "username": username, "user_id": user_id
+                            }
+                            print(f"    {username} — вхожу...", end=" ", flush=True)
+                            if inject_cookie(pkg, cookie):
+                                print("✓")
+                            elif login_clone(pkg, cookie):
+                                print("✓ (auth ticket)")
+                            else:
+                                print("не удалось — войди через пункт 4")
+                        else:
+                            print(f"    Неверный куки, пропускаю.")
         else:
             print("Ошибка установки!")
 
