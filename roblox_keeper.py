@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.12"
+VERSION           = "3.13"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -941,6 +941,7 @@ def menu_install_clones(data: dict, reinstall: bool = False):
             # Сохраняем имя пакета только после успешной установки
             packages[str(slot)] = pkg
             data["packages"] = packages
+            os.remove(apk_path)
             print("Готово ✓ (сессия сохранена)")
             print(f"    Инициализация (12 сек)...", end=" ", flush=True)
             launch_clone(pkg)
