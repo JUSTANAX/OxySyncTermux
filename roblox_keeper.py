@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.6"
+VERSION           = "3.7"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -355,6 +355,15 @@ def download_gofile(link: str, token: str, dest: str, label: str) -> bool:
 #  Android utilities
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def get_package_data_dir(package: str) -> str:
+    """Возвращает реальный dataDir пакета через pm dump (клоны могут хранить данные не по имени пакета)."""
+    r = _su(f"pm dump {package} | grep dataDir")
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("dataDir="):
+            return line.split("=", 1)[1].strip()
+    return f"/data/user/0/{package}"
+
 def get_apk_package(apk_path: str) -> str | None:
     try:
         r = subprocess.run(
@@ -512,8 +521,11 @@ def inject_cookie(package: str, cookie: str) -> bool:
     tmp     = "/sdcard/OxySync/tmp_cookies"
     tmp_wal = "/sdcard/OxySync/tmp_cookies-wal"
 
+    # Реальный dataDir — клоны могут хранить данные под другим именем (напр. com.og.launcher)
+    data_dir = get_package_data_dir(package)
+
     # Ищем существующий файл Cookies
-    find  = _su(f"find /data/data/{package}/app_webview -name 'Cookies' 2>/dev/null")
+    find  = _su(f"find {data_dir}/app_webview -name 'Cookies' 2>/dev/null")
     found = [p.strip() for p in find.stdout.splitlines() if p.strip()]
     created = False
 
@@ -526,7 +538,7 @@ def inject_cookie(package: str, cookie: str) -> bool:
             return False
     else:
         # База ещё не существует — создаём с нуля
-        db_path = f"/data/data/{package}/app_webview/Default/Cookies"
+        db_path = f"{data_dir}/app_webview/Default/Cookies"
         try:
             _create_webview_db(tmp)
             created = True
@@ -574,7 +586,7 @@ def inject_cookie(package: str, cookie: str) -> bool:
         conn.commit()
         conn.close()
 
-        owner = _su(f"stat -c '%u:%g' /data/data/{package}").stdout.strip()
+        owner = _su(f"stat -c '%u:%g' {data_dir}").stdout.strip()
 
         if created:
             parent = db_path.rsplit("/", 1)[0]
