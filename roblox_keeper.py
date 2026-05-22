@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.21"
+VERSION           = "3.22"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -1149,7 +1149,8 @@ def menu_launch(data: dict):
         print_status_card(int(slot_str), acc["username"], presence)
     print("─" * 40)
 
-    print(f"\n  Мониторинг запущен. Ctrl+C — стоп.\n")
+    ping_interval = data.get("settings", {}).get("ping_interval", PING_INTERVAL)
+    print(f"\n  Мониторинг запущен. Интервал: {ping_interval} сек. Ctrl+C — стоп.\n")
     try:
         monitor_all(sessions, active, packages, data)
     except KeyboardInterrupt:
@@ -1166,12 +1167,15 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
     check_counters  = {s: 0 for s in sessions}
     invalid_cookies: set = set()
     ingame_start:   dict = {}
-    # Сколько циклов пропустить после рестарта (пока клон грузится)
     restart_cooldown: dict = {}
     last_save = time.time()
+    cycle     = 0
 
     while True:
+        cycle += 1
         ts = time.strftime("%H:%M:%S")
+        print(f"\n  {DM}{'─' * 36}{RS}")
+        print(f"  {DM}Проверка #{cycle} · {ts}{RS}")
         for slot_str, session in sessions.items():
             if slot_str in invalid_cookies:
                 continue
@@ -1257,7 +1261,11 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
             save_data(data)
             last_save = now
 
-        time.sleep(ping_interval)
+        for remaining in range(ping_interval, 0, -1):
+            print(f"\r  {DM}Следующая проверка через {remaining} сек...{' ' * 5}{RS}",
+                  end="", flush=True)
+            time.sleep(1)
+        print(f"\r{' ' * 50}\r", end="", flush=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Menu 3 — Account settings
