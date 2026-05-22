@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.3"
+VERSION           = "3.4"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
