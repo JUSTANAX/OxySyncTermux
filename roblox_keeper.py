@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.17"
+VERSION           = "3.18"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -970,16 +970,27 @@ def menu_install_clones(data: dict, reinstall: bool = False):
 
         print(f"    Устанавливаю...", end=" ", flush=True)
         if install_apk_root(apk_path):
-            # Сохраняем имя пакета только после успешной установки
             packages[str(slot)] = pkg
             data["packages"] = packages
             os.remove(apk_path)
-            print("Готово ✓ (сессия сохранена)")
+            print("Готово ✓")
             print(f"    Инициализация (12 сек)...", end=" ", flush=True)
             launch_clone(pkg)
             time.sleep(12)
             force_stop(pkg)
             print("✓")
+
+            # При переустановке восстанавливаем аккаунт из сохранённых куки
+            if reinstall:
+                acc = data.get("accounts", {}).get(str(slot))
+                if acc and acc.get("cookie"):
+                    print(f"    Восстанавливаю {acc['username']}...", end=" ", flush=True)
+                    if inject_cookie(pkg, acc["cookie"]):
+                        print("✓")
+                    elif login_clone(pkg, acc["cookie"]):
+                        print("✓ (auth ticket)")
+                    else:
+                        print("не удалось — войди через пункт 4")
         else:
             print("Ошибка установки!")
 
