@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.15"
+VERSION           = "3.16"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -98,14 +98,18 @@ end)
 def load_data() -> dict:
     try:
         with open(DATA_FILE) as f:
-            return json.load(f)
+            d = json.load(f)
     except Exception:
-        return {
+        d = {
             "drive_folder_id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx",
             "executor": None,
             "packages": DEFAULT_PACKAGES.copy(),
             "accounts": {str(i): None for i in range(1, MAX_SLOTS + 1)},
         }
+    d.setdefault("settings", {})
+    d["settings"].setdefault("ping_interval", PING_INTERVAL)
+    d["settings"].setdefault("cookie_check_interval", COOKIE_CHECK_INTERVAL)
+    return d
 
 def save_data(data: dict):
     os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
@@ -762,7 +766,7 @@ def print_menu():
     _row("1", "Установить клоны")
     _desc("Скачать и установить клоны Roblox")
     _row("2", "Обновить клоны")
-    _desc("Переустановить клоны, сохранив аккаунты")
+    _desc("Переустановить (сессии сохраняются)")
     _row("3", "Удалить клоны")
     _desc("Удалить все установленные клоны")
     _bot()
@@ -770,27 +774,52 @@ def print_menu():
 
     _top("АККАУНТЫ")
     _row("4", "Войти в аккаунт")
-    _desc("Привязать Roblox аккаунт к слоту")
+    _desc("Куки -> авто-вход через инжект")
     _row("5", "Настройка аккаунтов")
-    _desc("Привязать игру к слоту")
+    _desc("Плейс, управление слотами")
     _bot()
     print()
 
     _top("ИГРА")
     _row("6", "Мульти-скрипты")
-    _desc("Назначить Lua скрипт каждому слоту")
+    _desc("Назначить Lua-скрипт каждому слоту")
     _row("7", "Запустить игры")
-    _desc("Запустить выбранные аккаунты и следить за ними")
+    _desc("Запуск + мониторинг + авто-рестарт")
     _bot()
     print()
 
     _top("ПРОЧЕЕ")
     _row("8", "Настройки")
-    _desc("Сменить инжектор")
+    _desc("Инжектор, интервалы мониторинга")
     _bot()
     print()
 
     print(f"  {DM}0  Выход{RS}\n")
+
+def format_ingame(secs: int) -> str:
+    if secs <= 0:
+        return "—"
+    h = secs // 3600
+    m = (secs % 3600) // 60
+    if h:
+        return f"{h}ч {m}м"
+    if m:
+        return f"{m}м"
+    return f"{secs}с"
+
+def print_slots_panel(data: dict):
+    accounts = data.get("accounts", {})
+    _top("СЛОТЫ")
+    for i in range(1, MAX_SLOTS + 1):
+        acc  = accounts.get(str(i))
+        nick = (acc["username"][:14] if acc else "—")
+        mark = f"{GR}✓{RS}" if acc else f"{DM}—{RS}"
+        igt  = format_ingame(acc.get("ingame_total", 0) if acc else 0)
+        # visible inner = W=34: "  {i:<2}  {nick:<14}  {mark}  {igt:<9}" = 2+2+2+14+2+1+2+9
+        row  = f"  {i:<2}  {nick:<14}  {mark}  {igt:<9}"
+        print(f"  {CY}│{RS}{row}{CY}│{RS}")
+    _bot()
+    print()
 
 def status_label(status: str) -> str:
     return {"ingame": "В игре", "online": "Онлайн", "offline": "Офлайн", "studio": "Studio"}.get(status, status)
@@ -1109,12 +1138,23 @@ def menu_launch(data: dict):
     print("─" * 40)
 
     print(f"\n  Мониторинг запущен. Ctrl+C — стоп.\n")
-    monitor_all(sessions, active, packages)
+    try:
+        monitor_all(sessions, active, packages, data)
+    except KeyboardInterrupt:
+        # Сохраняем накопленное время в игре при выходе
+        save_data(data)
+        print("\n\n  Мониторинг остановлен.\n")
 
-def monitor_all(sessions: dict, accounts: dict, packages: dict):
+def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
+    settings        = data.get("settings", {})
+    ping_interval   = settings.get("ping_interval", PING_INTERVAL)
+    cookie_interval = settings.get("cookie_check_interval", COOKIE_CHECK_INTERVAL)
+
     offline_counts  = {s: 0 for s in sessions}
     check_counters  = {s: 0 for s in sessions}
     invalid_cookies: set = set()
+    ingame_start:   dict = {}
+    last_save = time.time()
 
     while True:
         ts = time.strftime("%H:%M:%S")
@@ -1128,45 +1168,50 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict):
             name = acc["username"]
 
             try:
-                # Периодическая проверка куки
                 check_counters[slot_str] += 1
-                if check_counters[slot_str] >= COOKIE_CHECK_INTERVAL:
+                if check_counters[slot_str] >= cookie_interval:
                     check_counters[slot_str] = 0
                     if get_account_info(session) is None:
                         log(f"[{ts}] Слот {slot} ({name}): КУКИ ИСТЁК — слот отключён от мониторинга")
                         invalid_cookies.add(slot_str)
                         force_stop(pkg)
+                        if slot_str in ingame_start:
+                            elapsed = int(time.time() - ingame_start.pop(slot_str))
+                            acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
                         continue
 
-                # Краш процесса
                 if not is_process_running(pkg):
                     log(f"[{ts}] Слот {slot} ({name}): краш — перезапускаю...")
                     launch_clone(pkg, acc.get("place_id"))
                     offline_counts[slot_str] = 0
                     continue
 
-                # Heartbeat
                 if not is_heartbeat_alive(slot):
                     log(f"[{ts}] Слот {slot} ({name}): heartbeat устарел")
 
-                # Presence
                 presence  = get_presence(session, acc["user_id"])
                 status    = presence["status"]
                 game_name = presence["game_name"] or "—"
 
                 if status == "ingame":
+                    if slot_str not in ingame_start:
+                        ingame_start[slot_str] = time.time()
                     log(f"[{ts}] Слот {slot} ({name}): В игре — {game_name} ✓")
                     offline_counts[slot_str] = 0
-                elif status == "online":
-                    log(f"[{ts}] Слот {slot} ({name}): Онлайн")
-                    offline_counts[slot_str] = 0
-                elif status == "offline":
-                    offline_counts[slot_str] += 1
-                    log(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
-                    if offline_counts[slot_str] >= 3:
-                        log(f"[{ts}] Слот {slot}: перезапускаю...")
-                        launch_clone(pkg, acc.get("place_id"))
+                else:
+                    if slot_str in ingame_start:
+                        elapsed = int(time.time() - ingame_start.pop(slot_str))
+                        acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
+                    if status == "online":
+                        log(f"[{ts}] Слот {slot} ({name}): Онлайн")
                         offline_counts[slot_str] = 0
+                    elif status == "offline":
+                        offline_counts[slot_str] += 1
+                        log(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
+                        if offline_counts[slot_str] >= 3:
+                            log(f"[{ts}] Слот {slot}: перезапускаю...")
+                            launch_clone(pkg, acc.get("place_id"))
+                            offline_counts[slot_str] = 0
 
             except requests.exceptions.ConnectionError:
                 log(f"[{ts}] Нет интернета...")
@@ -1177,7 +1222,18 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict):
                     except Exception:
                         pass
 
-        time.sleep(PING_INTERVAL)
+        now = time.time()
+        if now - last_save >= 300:
+            for s, start in list(ingame_start.items()):
+                acc = accounts.get(s)
+                if acc:
+                    elapsed = int(now - start)
+                    acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
+                    ingame_start[s] = now
+            save_data(data)
+            last_save = now
+
+        time.sleep(ping_interval)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Menu 3 — Account settings
@@ -1362,28 +1418,55 @@ def menu_scripts(data: dict):
 
 def menu_settings(data: dict):
     print("\n[ Настройки ]\n")
-    current = data.get("executor")
-    print(f"  Инжектор: {current['name'] if current else '—'}\n")
+    current  = data.get("executor")
+    settings = data.setdefault("settings", {})
+    settings.setdefault("ping_interval", PING_INTERVAL)
+    settings.setdefault("cookie_check_interval", COOKIE_CHECK_INTERVAL)
+
+    print(f"  Инжектор  : {current['name'] if current else '—'}")
+    print(f"  Пинг      : каждые {settings['ping_interval']} сек")
+    print(f"  Куки-чек  : каждые {settings['cookie_check_interval']} циклов\n")
+
     print("  1. Сменить инжектор")
-    print("  2. Назад\n")
+    print("  2. Интервал мониторинга (сек)")
+    print("  3. Частота проверки куки (циклов)")
+    print("  4. Назад\n")
 
     choice = input("  Выбор: ").strip()
-    if choice != "1":
-        return
 
-    print("\n  Выбери инжектор:")
-    for k, v in EXECUTORS.items():
-        print(f"    {k}. {v['name']}")
-    ch = input("  Номер: ").strip()
-    if ch not in EXECUTORS:
-        print("  Неверный выбор.\n")
-        return
+    if choice == "1":
+        print("\n  Выбери инжектор:")
+        for k, v in EXECUTORS.items():
+            print(f"    {k}. {v['name']}")
+        ch = input("  Номер: ").strip()
+        if ch not in EXECUTORS:
+            print("  Неверный выбор.\n")
+            return
+        data["executor"] = EXECUTORS[ch]
+        save_data(data)
+        if any(data.get("accounts", {}).values()):
+            write_lua(data["executor"]["path"], data["accounts"])
+        print(f"\n  Инжектор -> {data['executor']['name']} ✓\n")
 
-    data["executor"] = EXECUTORS[ch]
-    save_data(data)
-    if any(data.get("accounts", {}).values()):
-        write_lua(data["executor"]["path"], data["accounts"])
-    print(f"\n  Инжектор → {data['executor']['name']} ✓\n")
+    elif choice == "2":
+        try:
+            val = int(input("  Интервал (сек, 10-300): ").strip())
+            val = max(10, min(300, val))
+            settings["ping_interval"] = val
+            save_data(data)
+            print(f"  Интервал -> {val} сек ✓\n")
+        except ValueError:
+            print("  Неверный ввод.\n")
+
+    elif choice == "3":
+        try:
+            val = int(input("  Проверять куки каждые N циклов (1-20): ").strip())
+            val = max(1, min(20, val))
+            settings["cookie_check_interval"] = val
+            save_data(data)
+            print(f"  Куки-чек -> каждые {val} циклов ✓\n")
+        except ValueError:
+            print("  Неверный ввод.\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1395,6 +1478,7 @@ def main():
     data = load_data()
 
     while True:
+        print_slots_panel(data)
         print_menu()
         choice = input(f"  {YL}›{RS} ").strip()
         print()
