@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.11"
+VERSION           = "3.12"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -531,15 +531,12 @@ def inject_cookie(package: str, cookie: str) -> bool:
         f"/data/user/0/{package}",
     ]))
 
-    print(f"    [dbg] pkg={package} internal={internal_pkg} dataDir={data_dir}")
-
     # Ищем существующий файл Cookies среди всех кандидатов
     found    = []
     app_base = None
     for cand in candidates:
         r = _su(f"find {cand}/app_webview -name 'Cookies' 2>/dev/null")
         hits = [p.strip() for p in r.stdout.splitlines() if p.strip()]
-        print(f"    [dbg] проверяю {cand}/app_webview → {hits or 'не найдено'}")
         if hits:
             found    = hits
             app_base = cand
@@ -548,7 +545,6 @@ def inject_cookie(package: str, cookie: str) -> bool:
 
     if found:
         db_path = found[0]
-        print(f"    [dbg] найдено: {db_path}")
         # Копируем DB и WAL вместе чтобы sqlite3 увидел консистентное состояние
         _su(f"cp '{db_path}-wal' '{tmp_wal}' 2>/dev/null; chmod 666 '{tmp_wal}' 2>/dev/null")
         if _su(f"cp '{db_path}' '{tmp}' && chmod 666 '{tmp}'").returncode != 0:
@@ -615,7 +611,6 @@ def inject_cookie(package: str, cookie: str) -> bool:
                 _su(f"chown {owner} '{parent}' '{parent.rsplit('/', 1)[0]}' 2>/dev/null")
 
         cp = _su(f"cp '{tmp}' '{db_path}'")
-        print(f"    [dbg] cp → rc={cp.returncode} err={cp.stderr.strip()!r}")
         if cp.returncode != 0:
             print(f"    Не удалось скопировать базу в app_webview")
             _su(f"rm -f '{tmp}' '{tmp_wal}'")
