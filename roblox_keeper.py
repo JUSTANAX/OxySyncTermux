@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.20"
+VERSION           = "3.21"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -1139,8 +1139,8 @@ def menu_launch(data: dict):
             pass
         sessions[slot_str] = s
 
-    print(f"\n  Ожидаю загрузку (25 сек)...")
-    time.sleep(25)
+    print(f"\n  Ожидаю загрузку (45 сек)...")
+    time.sleep(45)
 
     # Status cards
     print("\n" + "─" * 40)
