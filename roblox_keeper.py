@@ -11,14 +11,16 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.2"
+VERSION           = "3.3"
 
-DATA_FILE         = "/sdcard/OxySync/data.json"
-APK_DIR           = "/sdcard/OxySync/apks/"
-HEARTBEAT_DIR     = "/sdcard/OxySync/"
-HEARTBEAT_TIMEOUT = 90
-PING_INTERVAL     = 60
-MAX_SLOTS         = 8
+DATA_FILE            = "/sdcard/OxySync/data.json"
+APK_DIR              = "/sdcard/OxySync/apks/"
+HEARTBEAT_DIR        = "/sdcard/OxySync/"
+LOG_DIR              = "/sdcard/OxySync/logs/"
+HEARTBEAT_TIMEOUT    = 90
+PING_INTERVAL        = 60
+MAX_SLOTS            = 8
+COOKIE_CHECK_INTERVAL = 5  # проверять куки каждые N циклов мониторинга
 
 EXECUTORS = {
     "1": {"name": "Delta",    "path": "/sdcard/Delta/autoexec/"},
@@ -162,13 +164,25 @@ def list_drive_folder(folder_id: str) -> dict:
     url = f"https://drive.google.com/embeddedfolderview?id={folder_id}"
     try:
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        text = r.text
+
+        # Собираем позиции всех заголовков и entry ID в документе
+        titles  = [(m.start(), m.group(1).strip())
+                   for m in re.finditer(r'class="flip-entry-title"[^>]*>([^<]+)<', text)]
+        entries = [(m.start(), m.group(1))
+                   for m in re.finditer(r'id="entry-([a-zA-Z0-9_-]+)"', text)]
+
+        if not titles or not entries:
+            return {}
+
+        # Оба списка уже отсортированы по позиции — каждый заголовок принадлежит
+        # ближайшему entry ID в документе. Сортируем и соединяем попарно.
+        titles.sort()
+        entries.sort()
+
         files = {}
-        for m in re.finditer(r'id="entry-([a-zA-Z0-9_-]+)"', r.text):
-            entry_id = m.group(1)
-            segment  = r.text[m.start():m.start() + 2000]
-            title_m  = re.search(r'class="flip-entry-title"[^>]*>([^<]+)<', segment)
-            if title_m:
-                files[title_m.group(1).strip()] = entry_id
+        for (_, title), (_, entry_id) in zip(titles, entries):
+            files[title] = entry_id
         return files
     except Exception:
         return {}
@@ -415,89 +429,140 @@ def login_clone(package: str, cookie: str) -> bool:
         return False
     force_stop(package)
     time.sleep(1)
+    # Сначала запускаем приложение, чтобы оно успело инициализироваться
+    launch_clone(package)
+    time.sleep(5)
     # Запускаем через ActivityProtocol — активити которая обрабатывает roblox:// ссылки
     result = _su(
         f"am start -n {package}/com.roblox.client.ActivityProtocol"
         f" -a android.intent.action.VIEW"
         f" -d 'roblox://authenticate?ticket={ticket}&returnToApp=1'"
     )
+    if result.returncode == 0:
+        return True
     # Если ActivityProtocol не найден — пробуем без указания активити
-    if result.returncode != 0:
-        _su(
-            f"am start -a android.intent.action.VIEW"
-            f" -d 'roblox://authenticate?ticket={ticket}&returnToApp=1'"
-            f" -p {package}"
-        )
-    return True
+    result2 = _su(
+        f"am start -a android.intent.action.VIEW"
+        f" -d 'roblox://authenticate?ticket={ticket}&returnToApp=1'"
+        f" -p {package}"
+    )
+    return result2.returncode == 0
+
+def _create_webview_db(path: str):
+    """Создаёт минимальную WebView Cookies базу с правильной схемой."""
+    conn = sqlite3.connect(path)
+    cur  = conn.cursor()
+    cur.executescript("""
+        CREATE TABLE IF NOT EXISTS meta (
+            key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY,
+            value LONGVARCHAR
+        );
+        INSERT OR REPLACE INTO meta VALUES('version','20');
+        INSERT OR REPLACE INTO meta VALUES('last_compatible_version','20');
+        CREATE TABLE IF NOT EXISTS cookies (
+            creation_utc     INTEGER NOT NULL,
+            host_key         TEXT NOT NULL,
+            top_frame_site_key TEXT NOT NULL DEFAULT '',
+            name             TEXT NOT NULL,
+            value            TEXT NOT NULL,
+            encrypted_value  BLOB NOT NULL DEFAULT '',
+            path             TEXT NOT NULL,
+            expires_utc      INTEGER NOT NULL,
+            is_secure        INTEGER NOT NULL,
+            is_httponly      INTEGER NOT NULL,
+            last_access_utc  INTEGER NOT NULL,
+            has_expires      INTEGER NOT NULL,
+            is_persistent    INTEGER NOT NULL,
+            priority         INTEGER NOT NULL,
+            samesite         INTEGER NOT NULL DEFAULT -1,
+            source_scheme    INTEGER NOT NULL DEFAULT 2,
+            source_port      INTEGER NOT NULL DEFAULT 443,
+            is_same_party    INTEGER NOT NULL DEFAULT 0,
+            last_update_utc  INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS cookies_unique_index
+            ON cookies(host_key, top_frame_site_key, name, path, source_scheme, source_port);
+    """)
+    conn.commit()
+    conn.close()
 
 def inject_cookie(package: str, cookie: str) -> bool:
-    """Записывает .ROBLOSECURITY в WebView SQLite базу клона."""
-    # Ищем файл Cookies рекурсивно
-    find = _su(f"find /data/data/{package}/app_webview -name 'Cookies' 2>/dev/null")
-    db_paths = [p.strip() for p in find.stdout.splitlines() if p.strip()]
-
-    if not db_paths:
-        print(f"    База не найдена в app_webview")
-        ls = _su(f"ls /data/data/{package}/")
-        print(f"    Содержимое: {ls.stdout.strip()}")
-        return False
+    """Записывает .ROBLOSECURITY напрямую в WebView SQLite базу клона (без запуска приложения)."""
+    force_stop(package)
+    time.sleep(1)
 
     tmp = "/sdcard/OxySync/tmp_cookies"
 
-    for db_path in db_paths:
+    # Ищем существующий файл Cookies
+    find    = _su(f"find /data/data/{package}/app_webview -name 'Cookies' 2>/dev/null")
+    found   = [p.strip() for p in find.stdout.splitlines() if p.strip()]
+    created = False
+
+    if found:
+        db_path = found[0]
         if _su(f"cp '{db_path}' '{tmp}' && chmod 666 '{tmp}'").returncode != 0:
-            print(f"    Не удалось скопировать: {db_path}")
-            continue
+            print(f"    Не удалось скопировать базу")
+            return False
+    else:
+        # База ещё не существует — создаём с нуля
+        db_path = f"/data/data/{package}/app_webview/Default/Cookies"
         try:
-            conn = sqlite3.connect(tmp)
-            cur  = conn.cursor()
-
-            # Определяем схему таблицы
-            cur.execute("PRAGMA table_info(cookies)")
-            columns = {row[1] for row in cur.fetchall()}
-
-            cur.execute(
-                "DELETE FROM cookies WHERE host_key='.roblox.com' AND name='.ROBLOSECURITY'"
-            )
-
-            # Базовые поля — есть всегда
-            fields = ["creation_utc", "host_key", "name", "value", "path", "expires_utc",
-                      "is_secure", "is_httponly", "last_access_utc",
-                      "has_expires", "is_persistent", "priority", "encrypted_value"]
-            now    = int(time.time() * 1_000_000) + 11644473600 * 1_000_000
-            values = [now, '.roblox.com', '.ROBLOSECURITY', cookie, '/',
-                      13000000000000000, 1, 1, now, 1, 1, 1, b'']
-
-            # Опциональные поля — добавляем если есть в схеме
-            optional = [
-                ("samesite", -1), ("source_scheme", 2), ("source_port", 443),
-                ("is_same_party", 0), ("top_frame_site_key", ""),
-                ("last_update_utc", now), ("is_partitioned", 0),
-            ]
-            for col, val in optional:
-                if col in columns:
-                    fields.append(col)
-                    values.append(val)
-
-            placeholders = ",".join(["?"] * len(fields))
-            cur.execute(
-                f"INSERT INTO cookies ({','.join(fields)}) VALUES ({placeholders})",
-                values
-            )
-            conn.commit()
-            conn.close()
-
-            owner = _su(f"stat -c '%u:%g' /data/data/{package}").stdout.strip()
-            _su(f"cp '{tmp}' '{db_path}'")
-            if owner:
-                _su(f"chown {owner} '{db_path}'")
-            _su(f"chmod 600 '{db_path}' && rm -f '{tmp}'")
-            return True
+            _create_webview_db(tmp)
+            created = True
         except Exception as e:
-            print(f"    SQLite ошибка: {e}")
-            _su(f"rm -f '{tmp}'")
-            continue
-    return False
+            print(f"    Не удалось создать базу: {e}")
+            return False
+
+    try:
+        conn = sqlite3.connect(tmp)
+        cur  = conn.cursor()
+
+        cur.execute("PRAGMA table_info(cookies)")
+        columns = {row[1] for row in cur.fetchall()}
+
+        cur.execute(
+            "DELETE FROM cookies WHERE host_key='.roblox.com' AND name='.ROBLOSECURITY'"
+        )
+
+        now    = int(time.time() * 1_000_000) + 11644473600 * 1_000_000
+        fields = ["creation_utc", "host_key", "name", "value", "path", "expires_utc",
+                  "is_secure", "is_httponly", "last_access_utc",
+                  "has_expires", "is_persistent", "priority", "encrypted_value"]
+        values = [now, '.roblox.com', '.ROBLOSECURITY', cookie, '/',
+                  13000000000000000, 1, 1, now, 1, 1, 1, b'']
+
+        optional = [
+            ("top_frame_site_key", ""), ("samesite", -1),
+            ("source_scheme", 2), ("source_port", 443),
+            ("is_same_party", 0), ("last_update_utc", now), ("is_partitioned", 0),
+        ]
+        for col, val in optional:
+            if col in columns:
+                fields.append(col)
+                values.append(val)
+
+        placeholders = ",".join(["?"] * len(fields))
+        cur.execute(
+            f"INSERT INTO cookies ({','.join(fields)}) VALUES ({placeholders})",
+            values
+        )
+        conn.commit()
+        conn.close()
+
+        owner = _su(f"stat -c '%u:%g' /data/data/{package}").stdout.strip()
+        if created:
+            parent = db_path.rsplit("/", 1)[0]
+            _su(f"mkdir -p '{parent}'")
+        _su(f"cp '{tmp}' '{db_path}'")
+        if owner:
+            _su(f"chown {owner} '{db_path}'")
+        _su(f"rm -f '{db_path}-wal' '{db_path}-shm'")
+        _su(f"chmod 600 '{db_path}' && rm -f '{tmp}'")
+        return True
+    except Exception as e:
+        print(f"    SQLite ошибка: {e}")
+        _su(f"rm -f '{tmp}'")
+        return False
 
 def is_heartbeat_alive(slot: int) -> bool:
     try:
@@ -648,7 +713,13 @@ def print_menu():
     _row("6", "Мульти-скрипты")
     _desc("Назначить Lua скрипт каждому слоту")
     _row("7", "Запустить игры")
-    _desc("Запустить все аккаунты и следить за ними")
+    _desc("Запустить выбранные аккаунты и следить за ними")
+    _bot()
+    print()
+
+    _top("ПРОЧЕЕ")
+    _row("8", "Настройки")
+    _desc("Сменить инжектор")
     _bot()
     print()
 
@@ -666,6 +737,29 @@ def print_status_card(slot: int, username: str, presence: dict):
     print(f"  │  Статус  : {s:<27}│")
     print(f"  │  Игра    : {g:<27}│")
     print(f"  └{'─' * 38}┘")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Logging
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_log_handle = None
+_log_date   = None
+
+def log(msg: str):
+    global _log_handle, _log_date
+    print(msg)
+    today = time.strftime("%Y-%m-%d")
+    try:
+        if _log_date != today:
+            if _log_handle:
+                _log_handle.close()
+            os.makedirs(LOG_DIR, exist_ok=True)
+            _log_handle = open(f"{LOG_DIR}{today}.log", "a", encoding="utf-8")
+            _log_date   = today
+        _log_handle.write(msg + "\n")
+        _log_handle.flush()
+    except Exception:
+        pass
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Menu 1 & 4 — Install / Reinstall clones
@@ -739,22 +833,23 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         # Определяем package name из APK
         print(f"    Package name...", end=" ", flush=True)
         detected = get_apk_package(apk_path)
+        old_pkg  = packages.get(str(slot), pkg)
         if detected:
             print(detected)
-            packages[str(slot)] = detected
             pkg = detected
-            data["packages"] = packages
         else:
             print(f"не удалось, использую: {pkg}")
 
         # uninstall только если package name сменился
-        old_pkg = packages.get(str(slot))
         if reinstall and old_pkg and old_pkg != pkg and is_package_installed(old_pkg):
             print(f"    Package name изменился, удаляю старый...")
             uninstall_root(old_pkg)
 
         print(f"    Устанавливаю...", end=" ", flush=True)
         if install_apk_root(apk_path):
+            # Сохраняем имя пакета только после успешной установки
+            packages[str(slot)] = pkg
+            data["packages"] = packages
             print("Готово ✓ (сессия сохранена)")
             print(f"    Инициализация (12 сек)...", end=" ", flush=True)
             launch_clone(pkg)
@@ -848,10 +943,10 @@ def menu_login(data: dict):
     pkg = data.get("packages", DEFAULT_PACKAGES).get(str(slot), DEFAULT_PACKAGES[str(slot)])
     if is_package_installed(pkg):
         print(f"  Вхожу в клон...", end=" ", flush=True)
-        if login_clone(pkg, cookie):
+        if inject_cookie(pkg, cookie):
             print("✓")
-        elif inject_cookie(pkg, cookie):
-            print("✓ (SQLite)")
+        elif login_clone(pkg, cookie):
+            print("✓ (auth ticket)")
         else:
             print("не удалось — войди в клон вручную")
     else:
@@ -873,12 +968,26 @@ def menu_launch(data: dict):
         print("  Нет аккаунтов. Войди в аккаунты (пункт 2).\n")
         return
 
+    # Выбор слотов
+    print("  Доступные слоты:")
+    for s, a in sorted(active.items(), key=lambda x: int(x[0])):
+        print(f"    {s}. {a['username']}")
+    print()
+    raw = input("  Слоты (через запятую, Enter = все): ").strip()
+    if raw:
+        chosen = {x.strip() for x in raw.split(",")}
+        active = {s: a for s, a in active.items() if s in chosen}
+        if not active:
+            print("  Ни один из указанных слотов не найден.\n")
+            return
+    print()
+
     # Генерируем диспетчер перед запуском
     if executor:
         write_lua(executor["path"], data["accounts"])
 
     sessions = {}
-    for slot_str, acc in active.items():
+    for slot_str, acc in sorted(active.items(), key=lambda x: int(x[0])):
         slot = int(slot_str)
         pkg  = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
 
@@ -899,7 +1008,7 @@ def menu_launch(data: dict):
 
     # Status cards
     print("\n" + "─" * 40)
-    for slot_str, acc in active.items():
+    for slot_str, acc in sorted(active.items(), key=lambda x: int(x[0])):
         presence = get_presence(sessions[slot_str], acc["user_id"])
         print_status_card(int(slot_str), acc["username"], presence)
     print("─" * 40)
@@ -908,27 +1017,42 @@ def menu_launch(data: dict):
     monitor_all(sessions, active, packages)
 
 def monitor_all(sessions: dict, accounts: dict, packages: dict):
-    offline_counts = {s: 0 for s in sessions}
+    offline_counts  = {s: 0 for s in sessions}
+    check_counters  = {s: 0 for s in sessions}
+    invalid_cookies: set = set()
 
     while True:
         ts = time.strftime("%H:%M:%S")
         for slot_str, session in sessions.items():
+            if slot_str in invalid_cookies:
+                continue
+
             acc  = accounts[slot_str]
             pkg  = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
             slot = int(slot_str)
             name = acc["username"]
 
             try:
+                # Периодическая проверка куки
+                check_counters[slot_str] += 1
+                if check_counters[slot_str] >= COOKIE_CHECK_INTERVAL:
+                    check_counters[slot_str] = 0
+                    if get_account_info(session) is None:
+                        log(f"[{ts}] Слот {slot} ({name}): КУКИ ИСТЁК — слот отключён от мониторинга")
+                        invalid_cookies.add(slot_str)
+                        force_stop(pkg)
+                        continue
+
                 # Краш процесса
                 if not is_process_running(pkg):
-                    print(f"[{ts}] Слот {slot} ({name}): краш — перезапускаю...")
+                    log(f"[{ts}] Слот {slot} ({name}): краш — перезапускаю...")
                     launch_clone(pkg, acc.get("place_id"))
                     offline_counts[slot_str] = 0
                     continue
 
                 # Heartbeat
                 if not is_heartbeat_alive(slot):
-                    print(f"[{ts}] Слот {slot} ({name}): heartbeat устарел")
+                    log(f"[{ts}] Слот {slot} ({name}): heartbeat устарел")
 
                 # Presence
                 presence  = get_presence(session, acc["user_id"])
@@ -936,21 +1060,21 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict):
                 game_name = presence["game_name"] or "—"
 
                 if status == "ingame":
-                    print(f"[{ts}] Слот {slot} ({name}): В игре — {game_name} ✓")
+                    log(f"[{ts}] Слот {slot} ({name}): В игре — {game_name} ✓")
                     offline_counts[slot_str] = 0
                 elif status == "online":
-                    print(f"[{ts}] Слот {slot} ({name}): Онлайн")
+                    log(f"[{ts}] Слот {slot} ({name}): Онлайн")
                     offline_counts[slot_str] = 0
                 elif status == "offline":
                     offline_counts[slot_str] += 1
-                    print(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
+                    log(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
                     if offline_counts[slot_str] >= 3:
-                        print(f"[{ts}] Слот {slot}: перезапускаю...")
+                        log(f"[{ts}] Слот {slot}: перезапускаю...")
                         launch_clone(pkg, acc.get("place_id"))
                         offline_counts[slot_str] = 0
 
             except requests.exceptions.ConnectionError:
-                print(f"[{ts}] Нет интернета...")
+                log(f"[{ts}] Нет интернета...")
             except Exception as e:
                 if "403" in str(e) or "csrf" in str(e).lower():
                     try:
@@ -982,7 +1106,8 @@ def menu_account_settings(data: dict):
     print()
     print("  1. Привязать плейс к слоту")
     print("  2. Удалить привязку")
-    print("  3. Назад\n")
+    print("  3. Сбросить слот")
+    print("  4. Назад\n")
 
     choice = input("  Выбор: ").strip()
     print()
@@ -1026,6 +1151,28 @@ def menu_account_settings(data: dict):
         data["accounts"][str(slot)].pop("place_id", None)
         save_data(data)
         print(f"  Привязка удалена ✓\n")
+
+    elif choice == "3":
+        try:
+            slot = int(input(f"  Слот: ").strip())
+            if str(slot) not in active:
+                print("  Слот не найден.\n")
+                return
+        except ValueError:
+            print("  Неверный слот.\n")
+            return
+
+        name = active[str(slot)]["username"]
+        confirm = input(f"  Сбросить слот {slot} ({name})? (y/N): ").strip().lower()
+        if confirm != "y":
+            print("  Отмена.\n")
+            return
+        data["accounts"][str(slot)] = None
+        save_data(data)
+        executor = data.get("executor")
+        if executor:
+            write_lua(executor["path"], data["accounts"])
+        print(f"  Слот {slot} сброшен ✓\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1115,6 +1262,36 @@ def menu_scripts(data: dict):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  Menu 7 — Settings
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def menu_settings(data: dict):
+    print("\n[ Настройки ]\n")
+    current = data.get("executor")
+    print(f"  Инжектор: {current['name'] if current else '—'}\n")
+    print("  1. Сменить инжектор")
+    print("  2. Назад\n")
+
+    choice = input("  Выбор: ").strip()
+    if choice != "1":
+        return
+
+    print("\n  Выбери инжектор:")
+    for k, v in EXECUTORS.items():
+        print(f"    {k}. {v['name']}")
+    ch = input("  Номер: ").strip()
+    if ch not in EXECUTORS:
+        print("  Неверный выбор.\n")
+        return
+
+    data["executor"] = EXECUTORS[ch]
+    save_data(data)
+    if any(data.get("accounts", {}).values()):
+        write_lua(data["executor"]["path"], data["accounts"])
+    print(f"\n  Инжектор → {data['executor']['name']} ✓\n")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1141,6 +1318,8 @@ def main():
             menu_scripts(data)
         elif choice == "7":
             menu_launch(data)
+        elif choice == "8":
+            menu_settings(data)
         elif choice == "0":
             print("  Выход.\n")
             break
