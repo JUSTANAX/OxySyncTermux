@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.14"
+VERSION           = "3.15"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -31,7 +31,7 @@ EXECUTORS = {
 
 SOURCES = {
     "1": {"name": "VegaX", "type": "gdrive", "id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx", "apk": "com.roblox.clien{letter}.apk"},
-    # "2": {"name": "Delta", "type": "gdrive", "id": "...", "apk": "Lunex Delta {slot}.apk"},
+    "2": {"name": "Delta", "type": "gdrive", "id": "1_p5ch5lfwk1HJkqcvOSlh-bSozxogswd",  "apk": "Lunex Delta {slot}.apk"},
 }
 
 DEFAULT_PACKAGES = {
