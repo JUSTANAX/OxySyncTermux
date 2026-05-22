@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.23"
+VERSION           = "3.24"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -1152,7 +1152,8 @@ def menu_launch(data: dict):
     print("─" * 40)
 
     ping_interval = data.get("settings", {}).get("ping_interval", PING_INTERVAL)
-    print(f"\n  Мониторинг запущен. Интервал: {ping_interval} сек. Ctrl+C — стоп.\n")
+    print(f"\n  Мониторинг запущен. Интервал: {ping_interval} сек.")
+    print(f"  {DM}Для остановки нажми кнопку CTRL в Termux, затем C.{RS}\n")
     try:
         monitor_all(sessions, active, packages, data)
     except KeyboardInterrupt:
