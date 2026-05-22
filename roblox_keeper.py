@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.8"
+VERSION           = "3.9"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -519,12 +519,28 @@ def inject_cookie(package: str, cookie: str) -> bool:
     tmp     = "/sdcard/OxySync/tmp_cookies"
     tmp_wal = "/sdcard/OxySync/tmp_cookies-wal"
 
-    # Реальный dataDir — клоны могут хранить данные под другим именем (напр. com.og.launcher)
-    data_dir = get_package_data_dir(package)
+    # Клоны хранят WebView данные под внутренним именем пакета (без 't': clientb → clienb)
+    # pm dump возвращает dataDir лаунчера (com.og.launcher), а реальные куки лежат глубже
+    internal_pkg = package.replace("client", "clien")
+    data_dir     = get_package_data_dir(package)
+    candidates   = list(dict.fromkeys([
+        f"/data/data/{internal_pkg}",
+        f"/data/user/0/{internal_pkg}",
+        data_dir,
+        f"/data/data/{package}",
+        f"/data/user/0/{package}",
+    ]))
 
-    # Ищем существующий файл Cookies
-    find  = _su(f"find {data_dir}/app_webview -name 'Cookies' 2>/dev/null")
-    found = [p.strip() for p in find.stdout.splitlines() if p.strip()]
+    # Ищем существующий файл Cookies среди всех кандидатов
+    found    = []
+    app_base = None
+    for cand in candidates:
+        r = _su(f"find {cand}/app_webview -name 'Cookies' 2>/dev/null")
+        hits = [p.strip() for p in r.stdout.splitlines() if p.strip()]
+        if hits:
+            found    = hits
+            app_base = cand
+            break
     created = False
 
     if found:
@@ -535,8 +551,9 @@ def inject_cookie(package: str, cookie: str) -> bool:
             print(f"    Не удалось скопировать базу")
             return False
     else:
-        # База ещё не существует — создаём с нуля
-        db_path = f"{data_dir}/app_webview/Default/Cookies"
+        # База ещё не существует — создаём в наиболее вероятном месте (internal pkg)
+        app_base = f"/data/data/{internal_pkg}"
+        db_path  = f"{app_base}/app_webview/Default/Cookies"
         try:
             _create_webview_db(tmp)
             created = True
@@ -584,7 +601,7 @@ def inject_cookie(package: str, cookie: str) -> bool:
         conn.commit()
         conn.close()
 
-        owner = _su(f"stat -c '%u:%g' {data_dir}").stdout.strip()
+        owner = _su(f"stat -c '%u:%g' {app_base}").stdout.strip()
 
         if created:
             parent = db_path.rsplit("/", 1)[0]
