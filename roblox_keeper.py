@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.5"
+VERSION           = "3.6"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -158,6 +158,18 @@ def parse_drive_folder_id(url: str) -> str | None:
         return url
     return None
 
+
+def get_drive_folder_name(folder_id: str) -> str:
+    """Возвращает название публичной папки Google Drive (только заголовок страницы)."""
+    url = f"https://drive.google.com/embeddedfolderview?id={folder_id}"
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        m = re.search(r'<title>([^<]+)</title>', r.text)
+        if m:
+            return m.group(1).replace(" - Google Drive", "").strip()
+    except Exception:
+        pass
+    return ""
 
 def list_drive_folder(folder_id: str) -> tuple[str, dict]:
     """Возвращает (название_папки, {filename: file_id}) для публичной папки Google Drive."""
@@ -799,10 +811,21 @@ def menu_install_clones(data: dict, reinstall: bool = False):
     # Выбор пачки клонов (если источников больше одного — показываем меню)
     source_keys = list(SOURCES.keys())
     if len(source_keys) > 1:
+        print("  Загружаю версии пачек...", end=" ", flush=True)
+        folder_labels = {}
+        for k in source_keys:
+            s = SOURCES[k]
+            if s["type"] == "gdrive":
+                name = get_drive_folder_name(s["id"])
+                folder_labels[k] = name if name else s["name"]
+            else:
+                folder_labels[k] = s["name"]
+        print("готово\n")
+
         print("  Выбери пачку клонов:")
         for k in source_keys:
-            print(f"    {k}. {SOURCES[k]['name']}")
-        ch = input("  Номер: ").strip()
+            print(f"    {k}. {folder_labels[k]}")
+        ch = input("\n  Номер: ").strip()
         source = SOURCES.get(ch, SOURCES[source_keys[0]])
         print()
     else:
