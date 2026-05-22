@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.4"
+VERSION           = "3.5"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -159,12 +159,18 @@ def parse_drive_folder_id(url: str) -> str | None:
     return None
 
 
-def list_drive_folder(folder_id: str) -> dict:
-    """Возвращает {filename: file_id} для файлов в публичной папке Google Drive."""
+def list_drive_folder(folder_id: str) -> tuple[str, dict]:
+    """Возвращает (название_папки, {filename: file_id}) для публичной папки Google Drive."""
     url = f"https://drive.google.com/embeddedfolderview?id={folder_id}"
     try:
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         text = r.text
+
+        # Название папки — содержит версию если она указана в имени на Drive
+        folder_name = ""
+        title_m = re.search(r'<title>([^<]+)</title>', text)
+        if title_m:
+            folder_name = title_m.group(1).replace(" - Google Drive", "").strip()
 
         # Собираем позиции всех заголовков и entry ID в документе
         titles  = [(m.start(), m.group(1).strip())
@@ -173,7 +179,7 @@ def list_drive_folder(folder_id: str) -> dict:
                    for m in re.finditer(r'id="entry-([a-zA-Z0-9_-]+)"', text)]
 
         if not titles or not entries:
-            return {}
+            return folder_name, {}
 
         # Оба списка уже отсортированы по позиции — каждый заголовок принадлежит
         # ближайшему entry ID в документе. Сортируем и соединяем попарно.
@@ -183,9 +189,9 @@ def list_drive_folder(folder_id: str) -> dict:
         files = {}
         for (_, title), (_, entry_id) in zip(titles, entries):
             files[title] = entry_id
-        return files
+        return folder_name, files
     except Exception:
-        return {}
+        return "", {}
 
 
 def download_gdrive(file_id: str, dest: str, label: str) -> bool:
@@ -790,7 +796,17 @@ def menu_install_clones(data: dict, reinstall: bool = False):
     title = "Обновление клонов" if reinstall else "Установка клонов"
     print(f"\n[ {title} ]\n")
 
-    source = SOURCES["1"]
+    # Выбор пачки клонов (если источников больше одного — показываем меню)
+    source_keys = list(SOURCES.keys())
+    if len(source_keys) > 1:
+        print("  Выбери пачку клонов:")
+        for k in source_keys:
+            print(f"    {k}. {SOURCES[k]['name']}")
+        ch = input("  Номер: ").strip()
+        source = SOURCES.get(ch, SOURCES[source_keys[0]])
+        print()
+    else:
+        source = SOURCES[source_keys[0]]
 
     # Executor
     if not data.get("executor"):
@@ -814,13 +830,17 @@ def menu_install_clones(data: dict, reinstall: bool = False):
     # Получаем список файлов
     if source["type"] == "gdrive":
         print("  Получаю список файлов из Google Drive...", end=" ", flush=True)
-        remote_files = {name: ("gdrive", fid) for name, fid in list_drive_folder(source["id"]).items()}
+        folder_name, gdrive_files = list_drive_folder(source["id"])
+        remote_files = {name: ("gdrive", fid) for name, fid in gdrive_files.items()}
     else:
         print("  Получаю список файлов из Gofile...", end=" ", flush=True)
+        folder_name = source["name"]
         remote_files = {name: ("gofile", link, token) for name, (link, token) in list_gofile_folder(source["id"]).items()}
 
     if remote_files:
         print(f"найдено {len(remote_files)} файл(ов)")
+        if folder_name:
+            print(f"  Пачка: {GR}{folder_name}{RS}")
     else:
         print("не удалось получить список файлов\n")
         return
