@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.19"
+VERSION           = "3.20"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -388,7 +388,7 @@ def is_package_installed(package: str) -> bool:
     return package in r.stdout
 
 def is_process_running(package: str) -> bool:
-    r = subprocess.run(["pidof", package], capture_output=True, text=True)
+    r = _su(f"pidof {package}")
     return bool(r.stdout.strip())
 
 def parse_place_id(value: str) -> str | None:
@@ -1166,12 +1166,21 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
     check_counters  = {s: 0 for s in sessions}
     invalid_cookies: set = set()
     ingame_start:   dict = {}
+    # Сколько циклов пропустить после рестарта (пока клон грузится)
+    restart_cooldown: dict = {}
     last_save = time.time()
 
     while True:
         ts = time.strftime("%H:%M:%S")
         for slot_str, session in sessions.items():
             if slot_str in invalid_cookies:
+                continue
+
+            # Пропускаем N циклов после рестарта — клон ещё грузится
+            if slot_str in restart_cooldown:
+                restart_cooldown[slot_str] -= 1
+                if restart_cooldown[slot_str] <= 0:
+                    del restart_cooldown[slot_str]
                 continue
 
             acc  = accounts[slot_str]
@@ -1196,6 +1205,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                     log(f"[{ts}] Слот {slot} ({name}): краш — перезапускаю...")
                     launch_clone(pkg, acc.get("place_id"))
                     offline_counts[slot_str] = 0
+                    restart_cooldown[slot_str] = 3
                     continue
 
                 if not is_heartbeat_alive(slot):
@@ -1222,8 +1232,10 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                         log(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
                         if offline_counts[slot_str] >= 3:
                             log(f"[{ts}] Слот {slot}: перезапускаю...")
+                            force_stop(pkg)
                             launch_clone(pkg, acc.get("place_id"))
                             offline_counts[slot_str] = 0
+                            restart_cooldown[slot_str] = 3
 
             except requests.exceptions.ConnectionError:
                 log(f"[{ts}] Нет интернета...")
