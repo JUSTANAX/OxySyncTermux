@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.13"
+VERSION           = "3.14"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -30,7 +30,8 @@ EXECUTORS = {
 }
 
 SOURCES = {
-    "1": {"name": "VegaX", "type": "gdrive", "id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx"},
+    "1": {"name": "VegaX", "type": "gdrive", "id": "1YmbcVrTzMUAmgj8-jO3GItxW5e_eodtx", "apk": "com.roblox.clien{letter}.apk"},
+    # "2": {"name": "Delta", "type": "gdrive", "id": "...", "apk": "Lunex Delta {slot}.apk"},
 }
 
 DEFAULT_PACKAGES = {
@@ -896,10 +897,12 @@ def menu_install_clones(data: dict, reinstall: bool = False):
         return
     print()
 
+    apk_template = source.get("apk", "com.roblox.clien{letter}.apk")
+
     for slot in range(1, count + 1):
         pkg      = packages.get(str(slot), DEFAULT_PACKAGES[str(slot)])
         letter   = chr(ord('a') + slot)
-        apk_name = f"com.roblox.clien{letter}.apk"
+        apk_name = apk_template.format(slot=slot, letter=letter)
         apk_path = APK_DIR + apk_name
 
         if not reinstall and is_package_installed(pkg):
