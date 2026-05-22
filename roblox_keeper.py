@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.26"
+VERSION           = "3.27"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -1130,9 +1130,40 @@ def menu_delete_clones(data: dict):
         print("✓")
     print("\n  Готово.\n")
 
+def _do_login(data: dict, slot: int, cookie: str) -> bool:
+    """Валидирует куки, сохраняет аккаунт и инжектит в клон. Возвращает True при успехе."""
+    if cookie.startswith(".ROBLOSECURITY="):
+        cookie = cookie.split("=", 1)[1]
+
+    info = get_account_info(make_session(cookie))
+    if not info:
+        print("  Неверный или просроченный куки.")
+        return False
+
+    username = info.get("name", "Unknown")
+    user_id  = info.get("id", 0)
+    data["accounts"][str(slot)] = {"cookie": cookie, "username": username, "user_id": user_id}
+    save_data(data)
+    print(f"  Слот {slot} → {GR}{username}{RS} (ID: {user_id}) ✓")
+
+    pkg = data.get("packages", DEFAULT_PACKAGES).get(str(slot), DEFAULT_PACKAGES[str(slot)])
+    if is_package_installed(pkg):
+        print(f"  Вхожу в клон...", end=" ", flush=True)
+        if inject_cookie(pkg, cookie):
+            print("✓")
+        elif login_clone(pkg, cookie):
+            print("✓ (auth ticket)")
+        else:
+            print("не удалось — войди вручную")
+    else:
+        print(f"  Клон не установлен — войди вручную после установки")
+    return True
+
+
 def menu_login(data: dict):
     print("\n[ Вход в аккаунты ]\n")
-    accounts = data.setdefault("accounts", {str(i): None for i in range(1, MAX_SLOTS + 1)})
+    data.setdefault("accounts", {str(i): None for i in range(1, MAX_SLOTS + 1)})
+    accounts = data["accounts"]
 
     slots = installed_slots(data)
     if not slots:
@@ -1145,6 +1176,38 @@ def menu_login(data: dict):
         print(f"    Слот {i}: {acc['username'] if acc else '—'}")
     print()
 
+    # Несколько слотов — предлагаем bulk-режим
+    if len(slots) > 1:
+        print("  1. Войти в один слот")
+        print("  2. Вставить сразу несколько куки\n")
+        choice = input("  Выбор: ").strip()
+        print()
+
+        if choice == "2":
+            print(f"  Вставляй куки по одной на строку.")
+            print(f"  Слоты по порядку: {' → '.join(str(s) for s in slots)}")
+            print(f"  Пустая строка = закончить.\n")
+
+            cookies = []
+            for i, slot in enumerate(slots):
+                acc = accounts.get(str(slot))
+                cur = f" (сейчас: {acc['username']})" if acc else ""
+                raw = input(f"  Слот {slot}{cur}: ").strip()
+                if not raw:
+                    break
+                cookies.append((slot, raw))
+
+            if not cookies:
+                print("  Отмена.\n")
+                return
+
+            print()
+            for slot, cookie in cookies:
+                _do_login(data, slot, cookie)
+                print()
+            return
+
+    # Один слот
     try:
         slot = int(input(f"  Слот ({slots[0]}-{slots[-1]}): ").strip())
         if slot not in slots:
@@ -1153,33 +1216,9 @@ def menu_login(data: dict):
         print("  Неверный слот.\n")
         return
 
-    cookie = input(f"\n  Cookie для слота {slot}: ").strip()
-    if cookie.startswith(".ROBLOSECURITY="):
-        cookie = cookie.split("=", 1)[1]
-
-    session = make_session(cookie)
-    info    = get_account_info(session)
-    if not info:
-        print("  Неверный или просроченный cookie.\n")
-        return
-
-    username = info.get("name", "Unknown")
-    user_id  = info.get("id", 0)
-    accounts[str(slot)] = {"cookie": cookie, "username": username, "user_id": user_id}
-    save_data(data)
-    print(f"\n  Слот {slot} → {username} (ID: {user_id}) ✓")
-
-    pkg = data.get("packages", DEFAULT_PACKAGES).get(str(slot), DEFAULT_PACKAGES[str(slot)])
-    if is_package_installed(pkg):
-        print(f"  Вхожу в клон...", end=" ", flush=True)
-        if inject_cookie(pkg, cookie):
-            print("✓")
-        elif login_clone(pkg, cookie):
-            print("✓ (auth ticket)")
-        else:
-            print("не удалось — войди в клон вручную")
-    else:
-        print(f"  Клон не установлен — войди вручную после установки")
+    cookie = input(f"\n  Куки для слота {slot}: ").strip()
+    print()
+    _do_login(data, slot, cookie)
     print()
 
 # ═══════════════════════════════════════════════════════════════════════════════
