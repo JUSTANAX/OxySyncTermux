@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.10"
+VERSION           = "3.11"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -585,7 +585,7 @@ def inject_cookie(package: str, cookie: str) -> bool:
                   "is_secure", "is_httponly", "last_access_utc",
                   "has_expires", "is_persistent", "priority", "encrypted_value"]
         values = [now, '.roblox.com', '.ROBLOSECURITY', cookie, '/',
-                  13000000000000000, 1, 1, now, 1, 1, 1, b'']
+                  99999999999999999, 1, 1, now, 1, 1, 1, b'']
 
         optional = [
             ("top_frame_site_key", ""), ("samesite", -1),
