@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.7"
+VERSION           = "3.8"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -476,7 +476,7 @@ def login_clone(package: str, cookie: str) -> bool:
     return result2.returncode == 0
 
 def _create_webview_db(path: str):
-    """Создаёт минимальную WebView Cookies базу с правильной схемой."""
+    """Создаёт WebView Cookies базу с точной схемой Chromium (версия 15)."""
     conn = sqlite3.connect(path)
     cur  = conn.cursor()
     cur.executescript("""
@@ -484,31 +484,29 @@ def _create_webview_db(path: str):
             key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY,
             value LONGVARCHAR
         );
-        INSERT OR REPLACE INTO meta VALUES('version','20');
-        INSERT OR REPLACE INTO meta VALUES('last_compatible_version','20');
+        INSERT OR REPLACE INTO meta VALUES('version','15');
+        INSERT OR REPLACE INTO meta VALUES('last_compatible_version','15');
         CREATE TABLE IF NOT EXISTS cookies (
-            creation_utc     INTEGER NOT NULL,
-            host_key         TEXT NOT NULL,
-            top_frame_site_key TEXT NOT NULL DEFAULT '',
-            name             TEXT NOT NULL,
-            value            TEXT NOT NULL,
-            encrypted_value  BLOB NOT NULL DEFAULT '',
-            path             TEXT NOT NULL,
-            expires_utc      INTEGER NOT NULL,
-            is_secure        INTEGER NOT NULL,
-            is_httponly      INTEGER NOT NULL,
-            last_access_utc  INTEGER NOT NULL,
-            has_expires      INTEGER NOT NULL,
-            is_persistent    INTEGER NOT NULL,
-            priority         INTEGER NOT NULL,
-            samesite         INTEGER NOT NULL DEFAULT -1,
-            source_scheme    INTEGER NOT NULL DEFAULT 2,
-            source_port      INTEGER NOT NULL DEFAULT 443,
-            is_same_party    INTEGER NOT NULL DEFAULT 0,
-            last_update_utc  INTEGER NOT NULL DEFAULT 0
+            creation_utc       INTEGER NOT NULL,
+            top_frame_site_key TEXT NOT NULL,
+            host_key           TEXT NOT NULL,
+            name               TEXT NOT NULL,
+            value              TEXT NOT NULL,
+            encrypted_value    BLOB DEFAULT '',
+            path               TEXT NOT NULL,
+            expires_utc        INTEGER NOT NULL,
+            is_secure          INTEGER NOT NULL,
+            is_httponly        INTEGER NOT NULL,
+            last_access_utc    INTEGER NOT NULL,
+            has_expires        INTEGER NOT NULL DEFAULT 1,
+            is_persistent      INTEGER NOT NULL DEFAULT 1,
+            priority           INTEGER NOT NULL DEFAULT 1,
+            samesite           INTEGER NOT NULL DEFAULT -1,
+            source_scheme      INTEGER NOT NULL DEFAULT 0,
+            source_port        INTEGER NOT NULL DEFAULT -1,
+            is_same_party      INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (top_frame_site_key, host_key, name, path)
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS cookies_unique_index
-            ON cookies(host_key, top_frame_site_key, name, path, source_scheme, source_port);
     """)
     conn.commit()
     conn.close()
@@ -570,8 +568,8 @@ def inject_cookie(package: str, cookie: str) -> bool:
 
         optional = [
             ("top_frame_site_key", ""), ("samesite", -1),
-            ("source_scheme", 2), ("source_port", 443),
-            ("is_same_party", 0), ("last_update_utc", now), ("is_partitioned", 0),
+            ("source_scheme", 0), ("source_port", -1),
+            ("is_same_party", 0),
         ]
         for col, val in optional:
             if col in columns:
