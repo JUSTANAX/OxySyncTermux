@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.18"
+VERSION           = "3.19"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -809,13 +809,14 @@ def format_ingame(secs: int) -> str:
 
 def print_slots_panel(data: dict):
     accounts = data.get("accounts", {})
+    active   = [(i, accounts[str(i)]) for i in range(1, MAX_SLOTS + 1) if accounts.get(str(i))]
+    if not active:
+        return
     _top("СЛОТЫ")
-    for i in range(1, MAX_SLOTS + 1):
-        acc  = accounts.get(str(i))
-        nick = (acc["username"][:14] if acc else "—")
-        mark = f"{GR}✓{RS}" if acc else f"{DM}—{RS}"
-        igt  = format_ingame(acc.get("ingame_total", 0) if acc else 0)
-        # visible inner = W=34: "  {i:<2}  {nick:<14}  {mark}  {igt:<9}" = 2+2+2+14+2+1+2+9
+    for i, acc in active:
+        nick = acc["username"][:14]
+        mark = f"{GR}✓{RS}"
+        igt  = format_ingame(acc.get("ingame_total", 0))
         row  = f"  {i:<2}  {nick:<14}  {mark}  {igt:<9}"
         print(f"  {CY}│{RS}{row}{CY}│{RS}")
     _bot()
