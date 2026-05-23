@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.29"
+VERSION           = "3.30"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -378,6 +378,8 @@ def get_apk_package(apk_path: str) -> str | None:
         for line in r.stdout.splitlines():
             if line.startswith("package: name="):
                 return line.split("'")[1]
+    except FileNotFoundError:
+        print(f"    {YL}aapt не найден — используется дефолтный package name{RS}")
     except Exception:
         pass
     return None
@@ -878,11 +880,12 @@ def print_status_card(slot: int, username: str, presence: dict):
     s  = status_label(presence["status"])
     g  = (presence["game_name"] or "—")[:24]
     u  = username[:24]
-    print(f"  ┌─ Слот {slot} {'─' * 31}┐")
-    print(f"  │  Никнейм : {u:<27}│")
-    print(f"  │  Статус  : {s:<27}│")
-    print(f"  │  Игра    : {g:<27}│")
-    print(f"  └{'─' * 38}┘")
+    sc = {"В игре": GR, "Онлайн": YL, "Studio": YL}.get(s, DM)
+    print(f"  {CY}┌─ Слот {slot} {'─' * 31}┐{RS}")
+    print(f"  {CY}│{RS}  Никнейм : {u:<27}{CY}│{RS}")
+    print(f"  {CY}│{RS}  Статус  : {sc}{s:<27}{RS}{CY}│{RS}")
+    print(f"  {CY}│{RS}  Игра    : {g:<27}{CY}│{RS}")
+    print(f"  {CY}└{'─' * 38}┘{RS}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Logging
@@ -1205,9 +1208,14 @@ def menu_login(data: dict):
                 return
 
             print()
+            any_ok = False
             for slot, cookie in cookies:
-                _do_login(data, slot, cookie)
+                if _do_login(data, slot, cookie):
+                    any_ok = True
                 print()
+            if any_ok and input("  Запустить аккаунты сейчас? (y/N): ").strip().lower() == "y":
+                print()
+                menu_launch(data)
             return
 
     # Один слот
@@ -1221,7 +1229,10 @@ def menu_login(data: dict):
 
     cookie = input(f"\n  Куки для слота {slot}: ").strip()
     print()
-    _do_login(data, slot, cookie)
+    if _do_login(data, slot, cookie):
+        if input("  Запустить аккаунты сейчас? (y/N): ").strip().lower() == "y":
+            print()
+            menu_launch(data)
     print()
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1400,7 +1411,10 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
             last_save = now
 
         for remaining in range(ping_interval, 0, -1):
-            print(f"\r  {DM}Следующая проверка через {remaining} сек...{' ' * 5}{RS}",
+            elapsed = ping_interval - remaining
+            filled  = int(elapsed / ping_interval * 24)
+            bar     = "█" * filled + "░" * (24 - filled)
+            print(f"\r  {DM}[{bar}] {remaining:>3}с{RS}",
                   end="", flush=True)
             time.sleep(1)
         print(f"\r{' ' * 50}\r", end="", flush=True)
@@ -1426,14 +1440,13 @@ def menu_account_settings(data: dict):
         print(f"    Слот {slot_str} ({acc['username']}): {place}")
     print()
     print("  1. Привязать плейс к слоту")
-    print("  2. Удалить привязку")
-    print("  3. Сбросить слот")
-    print("  4. Назад\n")
+    print("  2. Привязать один плейс всем слотам")
+    print("  3. Удалить привязку")
+    print("  4. Сбросить слот")
+    print("  5. Назад\n")
 
     choice = input("  Выбор: ").strip()
     print()
-
-    active_list = sorted(active.keys(), key=int)
 
     if choice == "1":
         try:
@@ -1460,6 +1473,20 @@ def menu_account_settings(data: dict):
         print(f"\n  Слот {slot} → Place {place_id} ✓\n")
 
     elif choice == "2":
+        print("  Введи Place ID, ссылку roblox.com/games/... или deep link:")
+        raw = input("  : ").strip()
+
+        place_id = parse_place_id(raw)
+        if not place_id:
+            print("  Не удалось определить Place ID. Проверь ввод.\n")
+            return
+
+        for slot_str in sorted(active.keys(), key=int):
+            data["accounts"][slot_str]["place_id"] = place_id
+        save_data(data)
+        print(f"\n  Все слоты → Place {place_id} ✓\n")
+
+    elif choice == "3":
         try:
             slot = int(input(f"  Слот: ").strip())
             if str(slot) not in active:
@@ -1473,7 +1500,7 @@ def menu_account_settings(data: dict):
         save_data(data)
         print(f"  Привязка удалена ✓\n")
 
-    elif choice == "3":
+    elif choice == "4":
         try:
             slot = int(input(f"  Слот: ").strip())
             if str(slot) not in active:
