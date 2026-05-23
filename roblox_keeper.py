@@ -12,7 +12,7 @@ import uuid
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.36"
+VERSION           = "3.37"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
@@ -1389,13 +1389,14 @@ def menu_launch(data: dict):
         write_lua(executor["path"], data["accounts"])
 
     sessions = {}
-    for slot_str, acc in sorted(active.items(), key=lambda x: int(x[0])):
-        slot = int(slot_str)
-        pkg  = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
-
+    slot_list = sorted(active.items(), key=lambda x: int(x[0]))
+    for idx, (slot_str, acc) in enumerate(slot_list):
+        slot     = int(slot_str)
+        pkg      = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
         place_id = acc.get("place_id")
+
         print(f"  Слот {slot} ({acc['username']}): запуск...", end=" ", flush=True)
-        launch_clone(pkg, place_id)
+        launch_clone(pkg)
         print("✓")
 
         s = make_session(acc["cookie"])
@@ -1405,8 +1406,22 @@ def menu_launch(data: dict):
             pass
         sessions[slot_str] = s
 
-    print(f"\n  Ожидаю загрузку (45 сек)...")
-    time.sleep(45)
+        # Ждём загрузку клона, потом кидаем в игру
+        wait = 15
+        for remaining in range(wait, 0, -1):
+            filled = int((wait - remaining) / wait * 20)
+            bar    = "█" * filled + "░" * (20 - filled)
+            print(f"\r  {DM}[{bar}] {remaining:>2}с — загрузка клона{RS}", end="", flush=True)
+            time.sleep(1)
+        print(f"\r{' ' * 55}\r", end="", flush=True)
+
+        if place_id:
+            print(f"  Слот {slot}: вхожу в игру ({place_id})...", end=" ", flush=True)
+            launch_clone(pkg, place_id)
+            print("✓")
+
+    print(f"\n  Ожидаю вход в игру (20 сек)...")
+    time.sleep(20)
 
     # Status cards
     print("\n" + "─" * 40)
