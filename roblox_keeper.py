@@ -12,7 +12,7 @@ import uuid
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.41"
+VERSION           = "3.42"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
@@ -1047,11 +1047,13 @@ def _mon_log(msg: str):
 
 
 def _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_cooldown,
-                         monitor_mode="website", presences=None) -> int:
+                         monitor_mode="website", presences=None, uptime_start=None) -> int:
     SEP = f"  {DM}{'─' * 58}{RS}"
     n = 0
     if presences is None:
         presences = {}
+    if uptime_start is None:
+        uptime_start = {}
 
     def p(line=""):
         nonlocal n
@@ -1073,11 +1075,15 @@ def _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_co
             st_c  = f"{YL}✗ Куки истёк {RS}"
             cpu_s = "  —%"
             ram_s = "    —МБ"
+            up_s  = "—"
         elif slot_str in restart_cooldown:
             st_c  = f"{DM}↻ Загрузка.. {RS}"
             cpu_s = f"{cpu:3.0f}%"
             ram_s = f"{ram_mb:5d}МБ"
+            up_s  = "—"
         else:
+            elapsed = int(time.time() - uptime_start.get(slot_str, time.time()))
+            up_s    = format_ingame(elapsed)
             if monitor_mode == "injector":
                 alive = is_heartbeat_alive(int(slot_str), acc.get("username"))
                 st_c  = f"{GR}▶ В игре     {RS}" if alive else f"{DM}· Стоп       {RS}"
@@ -1107,7 +1113,7 @@ def _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_co
                     st_c = f"{DM}· —       {RS}{hb_mark}  "
             cpu_s = f"{cpu:3.0f}%"
             ram_s = f"{ram_mb:5d}МБ"
-        p(f"  {YL}{slot_str:<2}{RS}  {name:<14}  {st_c}  CPU {YL}{cpu_s}{RS}  RAM {GR}{ram_s}{RS}")
+        p(f"  {YL}{slot_str:<2}{RS}  {name:<14}  {st_c}  CPU {YL}{cpu_s}{RS}  RAM {GR}{ram_s}{RS}  UP {DM}{up_s:<7}{RS}")
     p(SEP)
     p(f"  {'':2}  {'':14}  {f'ИТОГО':<13}  CPU {YL}{total_cpu:3.0f}%{RS}  RAM {GR}{total_ram:5d}МБ{RS}")
     p(SEP)
@@ -1543,6 +1549,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
     invalid_cookies: set  = set()
     ingame_start:    dict = {}
     restart_cooldown: dict = {}
+    uptime_start:    dict = {s: time.time() for s in sessions}
     last_save   = time.time()
     cycle       = 0
     panel_lines = 0
@@ -1583,6 +1590,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                     if get_account_info(session) is None:
                         _mon_log(f"[{ts}] Слот {slot} ({name}): КУКИ ИСТЁК")
                         invalid_cookies.add(slot_str)
+                        uptime_start.pop(slot_str, None)
                         force_stop(pkg)
                         if slot_str in ingame_start:
                             elapsed = int(time.time() - ingame_start.pop(slot_str))
@@ -1599,6 +1607,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                     launch_clone(pkg, acc.get("place_id"), acc.get("link_code"))
                     offline_counts[slot_str] = 0
                     restart_cooldown[slot_str] = 3
+                    uptime_start[slot_str] = time.time()
                     continue
 
                 # ── Режим: Инжектор ──────────────────────────────────────────
@@ -1634,6 +1643,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                     launch_clone(pkg, acc.get("place_id"), acc.get("link_code"))
                     offline_counts[slot_str] = 0
                     restart_cooldown[slot_str] = 3
+                    uptime_start[slot_str] = time.time()
                     continue
 
                 if status == "ingame":
@@ -1659,6 +1669,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                         launch_clone(pkg, acc.get("place_id"), acc.get("link_code"))
                         offline_counts[slot_str] = 0
                         restart_cooldown[slot_str] = 3
+                        uptime_start[slot_str] = time.time()
                 else:
                     _mon_log(f"[{ts}] Слот {slot} ({name}): API недоступен")
 
@@ -1681,7 +1692,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
             print(f"\033[{panel_lines + 1}A\033[J", end="", flush=True)
         panel_lines = _print_monitor_panel(
             cycle, ts, accounts, stats, invalid_cookies, restart_cooldown,
-            monitor_mode, presences,
+            monitor_mode, presences, uptime_start,
         )
 
         # Countdown bar (single in-place line)
