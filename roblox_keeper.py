@@ -12,7 +12,7 @@ import uuid
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.37"
+VERSION           = "3.38"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
@@ -23,6 +23,12 @@ HEARTBEAT_TIMEOUT    = 90
 PING_INTERVAL        = 60
 MAX_SLOTS            = 8
 COOKIE_CHECK_INTERVAL = 5  # проверять куки каждые N циклов мониторинга
+
+MONITOR_MODES = {
+    "website":  "Вебсайт",
+    "injector": "Инжектор",
+    "both":     "Инжектор + Вебсайт",
+}
 
 EXECUTORS = {
     "1": {"name": "Delta",    "path": "/sdcard/Delta/autoexec/"},
@@ -111,6 +117,7 @@ def load_data() -> dict:
     d.setdefault("settings", {})
     d["settings"].setdefault("ping_interval", PING_INTERVAL)
     d["settings"].setdefault("cookie_check_interval", COOKIE_CHECK_INTERVAL)
+    d["settings"].setdefault("monitor_mode", "website")
     d.setdefault("api_url", "")
     d.setdefault("token", "")
     return d
@@ -986,17 +993,21 @@ def _mon_log(msg: str):
         _monitor_events.pop(0)
 
 
-def _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_cooldown) -> int:
+def _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_cooldown,
+                         monitor_mode="website", presences=None) -> int:
     SEP = f"  {DM}{'─' * 58}{RS}"
     n = 0
+    if presences is None:
+        presences = {}
 
     def p(line=""):
         nonlocal n
         print(line)
         n += 1
 
+    mode_label = MONITOR_MODES.get(monitor_mode, monitor_mode)
     p(SEP)
-    p(f"  {DM}Мониторинг  ·  #{cycle}  ·  {ts}{RS}")
+    p(f"  {DM}Мониторинг  ·  #{cycle}  ·  {ts}  ·  {mode_label}{RS}")
     p()
     total_cpu = 0.0
     total_ram = 0
@@ -1014,8 +1025,33 @@ def _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_co
             cpu_s = f"{cpu:3.0f}%"
             ram_s = f"{ram_mb:5d}МБ"
         else:
-            alive = is_heartbeat_alive(int(slot_str))
-            st_c  = f"{GR}▶ В игре     {RS}" if alive else f"{DM}· Стоп       {RS}"
+            if monitor_mode == "injector":
+                alive = is_heartbeat_alive(int(slot_str))
+                st_c  = f"{GR}▶ В игре     {RS}" if alive else f"{DM}· Стоп       {RS}"
+            elif monitor_mode == "website":
+                presence = presences.get(slot_str, {})
+                status   = presence.get("status", "unknown")
+                if status == "ingame":
+                    st_c = f"{GR}▶ В игре     {RS}"
+                elif status == "online":
+                    st_c = f"{YL}● Онлайн     {RS}"
+                elif status == "offline":
+                    st_c = f"{DM}· Офлайн     {RS}"
+                else:
+                    st_c = f"{DM}· Стоп       {RS}"
+            else:  # both
+                presence = presences.get(slot_str, {})
+                status   = presence.get("status", "unknown")
+                alive    = is_heartbeat_alive(int(slot_str))
+                hb_mark  = f"{GR}HB{RS}" if alive else f"{YL}!HB{RS}"
+                if status == "ingame":
+                    st_c = f"{GR}▶ В игре  {RS}{hb_mark}  "
+                elif status == "online":
+                    st_c = f"{YL}● Онлайн  {RS}{hb_mark}  "
+                elif status == "offline":
+                    st_c = f"{DM}· Офлайн  {RS}{hb_mark}  "
+                else:
+                    st_c = f"{DM}· —       {RS}{hb_mark}  "
             cpu_s = f"{cpu:3.0f}%"
             ram_s = f"{ram_mb:5d}МБ"
         p(f"  {YL}{slot_str:<2}{RS}  {name:<14}  {st_c}  CPU {YL}{cpu_s}{RS}  RAM {GR}{ram_s}{RS}")
@@ -1464,6 +1500,9 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
             pkg = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
             stats[slot_str] = get_process_stats(pkg, slot_str)
 
+        monitor_mode = settings.get("monitor_mode", "website")
+        presences: dict = {}
+
         for slot_str, session in sessions.items():
             if slot_str in invalid_cookies:
                 continue
@@ -1480,6 +1519,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
             name = acc["username"]
 
             try:
+                # Куки-чек (всегда, независимо от режима)
                 check_counters[slot_str] += 1
                 if check_counters[slot_str] >= cookie_interval:
                     check_counters[slot_str] = 0
@@ -1493,6 +1533,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                         save_data(data)
                         continue
 
+                # Краш процесса (всегда)
                 if not is_process_running(pkg):
                     _mon_log(f"[{ts}] Слот {slot} ({name}): краш — перезапуск")
                     if slot_str in ingame_start:
@@ -1503,9 +1544,40 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                     restart_cooldown[slot_str] = 3
                     continue
 
+                # ── Режим: Инжектор ──────────────────────────────────────────
+                if monitor_mode == "injector":
+                    if not is_heartbeat_alive(slot):
+                        _mon_log(f"[{ts}] Слот {slot} ({name}): HB мёртв — перезапуск")
+                        if slot_str in ingame_start:
+                            elapsed = int(time.time() - ingame_start.pop(slot_str))
+                            acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
+                        force_stop(pkg)
+                        launch_clone(pkg, acc.get("place_id"))
+                        offline_counts[slot_str] = 0
+                        restart_cooldown[slot_str] = 3
+                    else:
+                        if slot_str not in ingame_start:
+                            ingame_start[slot_str] = time.time()
+                        _mon_log(f"[{ts}] Слот {slot} ({name}): HB ✓")
+                    continue
+
+                # ── Режим: Вебсайт / Инжектор + Вебсайт ─────────────────────
                 presence  = get_presence(session, acc["user_id"])
+                presences[slot_str] = presence
                 status    = presence["status"]
                 game_name = presence["game_name"] or "—"
+
+                # В режиме "both" — heartbeat тоже тригерит перезапуск
+                if monitor_mode == "both" and not is_heartbeat_alive(slot):
+                    _mon_log(f"[{ts}] Слот {slot} ({name}): HB мёртв — перезапуск")
+                    if slot_str in ingame_start:
+                        elapsed = int(time.time() - ingame_start.pop(slot_str))
+                        acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
+                    force_stop(pkg)
+                    launch_clone(pkg, acc.get("place_id"))
+                    offline_counts[slot_str] = 0
+                    restart_cooldown[slot_str] = 3
+                    continue
 
                 if status == "ingame":
                     if slot_str not in ingame_start:
@@ -1550,7 +1622,10 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
         # Erase previous panel then draw fresh one
         if panel_lines:
             print(f"\033[{panel_lines + 1}A\033[J", end="", flush=True)
-        panel_lines = _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_cooldown)
+        panel_lines = _print_monitor_panel(
+            cycle, ts, accounts, stats, invalid_cookies, restart_cooldown,
+            monitor_mode, presences,
+        )
 
         # Countdown bar (single in-place line)
         for remaining in range(ping_interval, 0, -1):
@@ -1761,15 +1836,19 @@ def menu_settings(data: dict):
     settings = data.setdefault("settings", {})
     settings.setdefault("ping_interval", PING_INTERVAL)
     settings.setdefault("cookie_check_interval", COOKIE_CHECK_INTERVAL)
+    settings.setdefault("monitor_mode", "website")
 
+    mode_label = MONITOR_MODES.get(settings["monitor_mode"], settings["monitor_mode"])
     print(f"  Инжектор  : {current['name'] if current else '—'}")
     print(f"  Пинг      : каждые {settings['ping_interval']} сек")
-    print(f"  Куки-чек  : каждые {settings['cookie_check_interval']} циклов\n")
+    print(f"  Куки-чек  : каждые {settings['cookie_check_interval']} циклов")
+    print(f"  Мониторинг: {mode_label}\n")
 
     print("  1. Сменить инжектор")
     print("  2. Интервал мониторинга (сек)")
     print("  3. Частота проверки куки (циклов)")
-    print("  4. Назад\n")
+    print("  4. Способ мониторинга")
+    print("  5. Назад\n")
 
     choice = input("  Выбор: ").strip()
 
@@ -1804,6 +1883,24 @@ def menu_settings(data: dict):
             settings["cookie_check_interval"] = val
             save_data(data)
             print(f"  Куки-чек -> каждые {val} циклов ✓\n")
+        except ValueError:
+            print("  Неверный ввод.\n")
+
+    elif choice == "4":
+        print()
+        keys = list(MONITOR_MODES.keys())
+        for i, k in enumerate(keys, 1):
+            cur = f"  {GR}← текущий{RS}" if k == settings["monitor_mode"] else ""
+            print(f"  {i}. {MONITOR_MODES[k]}{cur}")
+        print()
+        try:
+            idx = int(input("  Выбор: ").strip()) - 1
+            if 0 <= idx < len(keys):
+                settings["monitor_mode"] = keys[idx]
+                save_data(data)
+                print(f"\n  Мониторинг -> {MONITOR_MODES[keys[idx]]} ✓\n")
+            else:
+                print("  Неверный выбор.\n")
         except ValueError:
             print("  Неверный ввод.\n")
 
