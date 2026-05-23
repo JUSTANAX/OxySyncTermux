@@ -1,0 +1,49 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-arm64:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          sudo apt-get install -y patchelf ccache
+          pip install nuitka zstandard requests
+
+      - name: Compile
+        run: |
+          python -m nuitka \
+            --onefile \
+            --output-filename=oxysync-linux \
+            --include-package=requests \
+            --assume-yes-for-downloads \
+            --no-progressbar \
+            roblox_keeper.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxysync-linux-arm64
+          path: oxysync-linux
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest
+          files: oxysync-linux
+          make_latest: true
