@@ -6,14 +6,16 @@ import json
 import subprocess
 import re
 import sqlite3
+import uuid
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.33"
+VERSION           = "3.34"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
+DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
 APK_DIR              = "/sdcard/OxySync/apks/"
 HEARTBEAT_DIR        = "/sdcard/OxySync/"
 LOG_DIR              = "/sdcard/OxySync/logs/"
@@ -109,6 +111,8 @@ def load_data() -> dict:
     d.setdefault("settings", {})
     d["settings"].setdefault("ping_interval", PING_INTERVAL)
     d["settings"].setdefault("cookie_check_interval", COOKIE_CHECK_INTERVAL)
+    d.setdefault("api_url", "")
+    d.setdefault("token", "")
     return d
 
 def save_data(data: dict):
@@ -1751,12 +1755,71 @@ def menu_help():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  Auth
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_device_id() -> str:
+    try:
+        with open(DEVICE_ID_FILE) as f:
+            did = f.read().strip()
+            if did:
+                return did
+    except FileNotFoundError:
+        pass
+    did = str(uuid.uuid4())
+    os.makedirs(os.path.dirname(DEVICE_ID_FILE), exist_ok=True)
+    with open(DEVICE_ID_FILE, "w") as f:
+        f.write(did)
+    return did
+
+
+def auth_check(data: dict) -> dict:
+    """Проверяет токен через сервер. При ошибке — завершает процесс."""
+    if not data.get("api_url") or not data.get("token"):
+        print(f"\n  {YL}[ Первый запуск — авторизация ]{RS}\n")
+        api_url = input("  API URL (от разработчика) : ").strip().rstrip("/")
+        token   = input("  Токен (из Telegram бота) : ").strip()
+        data["api_url"] = api_url
+        data["token"]   = token
+        save_data(data)
+
+    device_id = get_device_id()
+    print(f"  Авторизация...", end=" ", flush=True)
+    try:
+        r = requests.post(
+            f"{data['api_url']}/api/v1/auth",
+            json={"token": data["token"], "device_id": device_id},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            result = r.json()
+            plan   = {"free": "Бесплатный", "premium": "Премиум"}.get(
+                result.get("plan", ""), result.get("plan", "")
+            )
+            print(f"{GR}✓ {plan}{RS}\n")
+            return result
+        if r.status_code == 401:
+            print(f"{YL}Неверный токен{RS}")
+            print(f"\n  Получи токен: Telegram бот → /token\n")
+        elif r.status_code == 403:
+            print(f"{YL}Устройство заблокировано{RS}\n")
+        else:
+            print(f"{YL}Ошибка сервера ({r.status_code}){RS}\n")
+    except requests.exceptions.ConnectionError:
+        print(f"{YL}Нет соединения с сервером{RS}\n")
+    except Exception as e:
+        print(f"{YL}Ошибка: {e}{RS}\n")
+    sys.exit(1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
     banner()
     data = load_data()
+    auth_check(data)
 
     while True:
         print_slots_panel(data)
@@ -1794,10 +1857,12 @@ if __name__ == "__main__":
         if arg == "--install":
             data = load_data()
             banner()
+            auth_check(data)
             menu_install_clones(data)
         elif arg == "--update":
             data = load_data()
             banner()
+            auth_check(data)
             menu_install_clones(data, reinstall=True)
         else:
             main()
