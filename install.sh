@@ -18,9 +18,9 @@ if [ $? -ne 0 ]; then
 fi
 
 # ── 2. Системные пакеты ──────────────────────────────────────────────────────
-echo "  [2/4] Установка Python, curl, aapt..."
-echo "        (может занять 2-5 минут — подожди)"
-pkg install python curl aapt -y -q 2>/dev/null
+echo "  [2/4] Установка Python и curl..."
+echo "        (может занять 1-3 минуты — подожди)"
+pkg install python curl -y -q 2>/dev/null
 
 if ! command -v python &>/dev/null; then
     echo ""
