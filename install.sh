@@ -3,8 +3,6 @@
 # ─── OxySync Installer ──────────────────────────────────────────────────────
 INSTALL_DIR="$HOME/.oxysync"
 LAUNCHER="$INSTALL_DIR/run.py"
-SCRIPT_URL="https://raw.githubusercontent.com/JUSTANAX/OxySyncTermux/main/roblox_keeper.py"
-REQ_URL="https://raw.githubusercontent.com/JUSTANAX/OxySyncTermux/main/requirements.txt"
 
 echo ""
 echo "  ╔══════════════════════════════════╗"
@@ -12,17 +10,28 @@ echo "  ║    OxySync — Установка           ║"
 echo "  ╚══════════════════════════════════╝"
 echo ""
 
-# ── 1. Системные пакеты ──────────────────────────────────────────────────────
-echo "  [1/3] Установка пакетов..."
+# ── 1. Обновление пакетов ────────────────────────────────────────────────────
+echo "  [1/4] Обновление пакетов Termux..."
+pkg update -y -q 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo "  Не удалось обновить пакеты, пробую продолжить..."
+fi
+
+# ── 2. Системные пакеты ──────────────────────────────────────────────────────
+echo "  [2/4] Установка Python, curl, aapt..."
+echo "        (может занять 2-5 минут — подожди)"
 pkg install python curl aapt -y -q 2>/dev/null
 
 if ! command -v python &>/dev/null; then
-    echo "  Ошибка: Python не установился. Попробуй: pkg install python"
+    echo ""
+    echo "  Ошибка: Python не установился."
+    echo "  Попробуй сменить зеркало: termux-change-repo"
+    echo "  Затем запусти установку заново."
     exit 1
 fi
 
-# ── 2. Python библиотеки ─────────────────────────────────────────────────────
-echo "  [2/3] Установка библиотек..."
+# ── 3. Python библиотеки ─────────────────────────────────────────────────────
+echo "  [3/4] Установка библиотек Python..."
 pip install requests -q
 if [ $? -ne 0 ]; then
     echo "  Ошибка: не удалось установить библиотеки."
@@ -30,12 +39,12 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# ── 3. Лаунчер ───────────────────────────────────────────────────────────────
-echo "  [3/3] Установка OxySync..."
+# ── 4. Лаунчер ───────────────────────────────────────────────────────────────
+echo "  [4/4] Установка OxySync..."
 mkdir -p "$INSTALL_DIR"
 chmod 700 "$INSTALL_DIR"
 
-cat > "$LAUNCHER" << PYEOF
+cat > "$LAUNCHER" << 'PYEOF'
 import requests, sys, base64, json
 
 API_URL = "https://api.github.com/repos/JUSTANAX/OxySyncTermux/contents/roblox_keeper.py"
@@ -62,7 +71,9 @@ grep -v "alias oxysync=" "$SHELL_RC" > "$SHELL_RC.tmp" 2>/dev/null && mv "$SHELL
 echo "alias oxysync='python $LAUNCHER'" >> "$SHELL_RC"
 
 echo ""
-echo "  Установка завершена. Запускаю OxySync..."
+echo "  ✓ Установка завершена!"
+echo ""
+echo "  Запускаю OxySync..."
 echo ""
 
 python "$LAUNCHER" "$@"
