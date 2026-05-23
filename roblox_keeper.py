@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.28"
+VERSION           = "3.29"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -1339,10 +1339,14 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                         if slot_str in ingame_start:
                             elapsed = int(time.time() - ingame_start.pop(slot_str))
                             acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
+                        save_data(data)
                         continue
 
                 if not is_process_running(pkg):
                     log(f"[{ts}] Слот {slot} ({name}): краш — перезапускаю...")
+                    if slot_str in ingame_start:
+                        elapsed = int(time.time() - ingame_start.pop(slot_str))
+                        acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
                     launch_clone(pkg, acc.get("place_id"))
                     offline_counts[slot_str] = 0
                     restart_cooldown[slot_str] = 3
@@ -1360,31 +1364,29 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                         ingame_start[slot_str] = time.time()
                     log(f"[{ts}] Слот {slot} ({name}): В игре — {game_name} ✓")
                     offline_counts[slot_str] = 0
-                else:
+                elif status == "online":
                     if slot_str in ingame_start:
                         elapsed = int(time.time() - ingame_start.pop(slot_str))
                         acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
-                    if status == "online":
-                        log(f"[{ts}] Слот {slot} ({name}): Онлайн")
+                    log(f"[{ts}] Слот {slot} ({name}): Онлайн")
+                    offline_counts[slot_str] = 0
+                elif status == "offline":
+                    if slot_str in ingame_start:
+                        elapsed = int(time.time() - ingame_start.pop(slot_str))
+                        acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
+                    offline_counts[slot_str] += 1
+                    log(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
+                    if offline_counts[slot_str] >= 3:
+                        log(f"[{ts}] Слот {slot}: перезапускаю...")
+                        force_stop(pkg)
+                        launch_clone(pkg, acc.get("place_id"))
                         offline_counts[slot_str] = 0
-                    elif status == "offline":
-                        offline_counts[slot_str] += 1
-                        log(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
-                        if offline_counts[slot_str] >= 3:
-                            log(f"[{ts}] Слот {slot}: перезапускаю...")
-                            force_stop(pkg)
-                            launch_clone(pkg, acc.get("place_id"))
-                            offline_counts[slot_str] = 0
-                            restart_cooldown[slot_str] = 3
+                        restart_cooldown[slot_str] = 3
+                else:
+                    log(f"[{ts}] Слот {slot} ({name}): API недоступен, пропускаю цикл")
 
             except requests.exceptions.ConnectionError:
                 log(f"[{ts}] Нет интернета...")
-            except Exception as e:
-                if "403" in str(e) or "csrf" in str(e).lower():
-                    try:
-                        session.headers.update({"X-CSRF-TOKEN": get_csrf(session)})
-                    except Exception:
-                        pass
 
         now = time.time()
         if now - last_save >= 300:
