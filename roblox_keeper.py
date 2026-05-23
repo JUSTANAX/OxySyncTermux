@@ -12,7 +12,7 @@ import uuid
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.40"
+VERSION           = "3.41"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
@@ -744,12 +744,16 @@ def inject_cookie(package: str, cookie: str) -> bool:
         _su(f"rm -f '{tmp}' '{tmp_wal}'")
         return False
 
-def is_heartbeat_alive(slot: int) -> bool:
-    try:
-        with open(f"{HEARTBEAT_DIR}hb_{slot}.txt") as f:
-            return (time.time() - int(f.read().strip())) < HEARTBEAT_TIMEOUT
-    except Exception:
-        return False
+def is_heartbeat_alive(slot: int, username: str = None) -> bool:
+    # Dispatcher пишет hb_{username}.txt, одиночный скрипт — hb_{slot}.txt
+    for name in ([username, str(slot)] if username else [str(slot)]):
+        try:
+            with open(f"{HEARTBEAT_DIR}hb_{name}.txt") as f:
+                if (time.time() - int(f.read().strip())) < HEARTBEAT_TIMEOUT:
+                    return True
+        except Exception:
+            pass
+    return False
 
 
 _cpu_ticks_prev: dict = {}  # {slot_str: (proc_ticks, total_ticks)}
@@ -1075,7 +1079,7 @@ def _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_co
             ram_s = f"{ram_mb:5d}МБ"
         else:
             if monitor_mode == "injector":
-                alive = is_heartbeat_alive(int(slot_str))
+                alive = is_heartbeat_alive(int(slot_str), acc.get("username"))
                 st_c  = f"{GR}▶ В игре     {RS}" if alive else f"{DM}· Стоп       {RS}"
             elif monitor_mode == "website":
                 presence = presences.get(slot_str, {})
@@ -1091,7 +1095,7 @@ def _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_co
             else:  # both
                 presence = presences.get(slot_str, {})
                 status   = presence.get("status", "unknown")
-                alive    = is_heartbeat_alive(int(slot_str))
+                alive    = is_heartbeat_alive(int(slot_str), acc.get("username"))
                 hb_mark  = f"{GR}HB{RS}" if alive else f"{YL}!HB{RS}"
                 if status == "ingame":
                     st_c = f"{GR}▶ В игре  {RS}{hb_mark}  "
@@ -1599,7 +1603,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
 
                 # ── Режим: Инжектор ──────────────────────────────────────────
                 if monitor_mode == "injector":
-                    if not is_heartbeat_alive(slot):
+                    if not is_heartbeat_alive(slot, name):
                         _mon_log(f"[{ts}] Слот {slot} ({name}): HB мёртв — перезапуск")
                         if slot_str in ingame_start:
                             elapsed = int(time.time() - ingame_start.pop(slot_str))
@@ -1621,7 +1625,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                 game_name = presence["game_name"] or "—"
 
                 # В режиме "both" — heartbeat тоже тригерит перезапуск
-                if monitor_mode == "both" and not is_heartbeat_alive(slot):
+                if monitor_mode == "both" and not is_heartbeat_alive(slot, name):
                     _mon_log(f"[{ts}] Слот {slot} ({name}): HB мёртв — перезапуск")
                     if slot_str in ingame_start:
                         elapsed = int(time.time() - ingame_start.pop(slot_str))
