@@ -64,16 +64,19 @@ PYEOF
 
 chmod 600 "$LAUNCHER"
 
-# ── Алиас ────────────────────────────────────────────────────────────────────
-SHELL_RC="$HOME/.bashrc"
-[ -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.zshrc"
-grep -v "alias oxysync=" "$SHELL_RC" > "$SHELL_RC.tmp" 2>/dev/null && mv "$SHELL_RC.tmp" "$SHELL_RC"
-echo "alias oxysync='python $LAUNCHER'" >> "$SHELL_RC"
+# ── Команда oxysync ──────────────────────────────────────────────────────────
+BIN_PATH="$PREFIX/bin/oxysync"
+cat > "$BIN_PATH" << SHEOF
+#!/data/data/com.termux/files/usr/bin/bash
+exec python $LAUNCHER "\$@"
+SHEOF
+chmod 700 "$BIN_PATH"
 
 echo ""
 echo "  ✓ Установка завершена!"
+echo "  Теперь ты можешь запускать OxySync командой: oxysync"
 echo ""
 echo "  Запускаю OxySync..."
 echo ""
 
-python "$LAUNCHER" "$@"
+python "$LAUNCHER" "$@" < /dev/tty
