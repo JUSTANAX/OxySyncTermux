@@ -12,7 +12,7 @@ import uuid
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.35"
+VERSION           = "3.36"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
@@ -695,6 +695,42 @@ def is_heartbeat_alive(slot: int) -> bool:
     except Exception:
         return False
 
+
+_cpu_ticks_prev: dict = {}  # {slot_str: (proc_ticks, total_ticks)}
+
+def get_process_stats(package: str, slot_str: str) -> tuple[float, int]:
+    """Returns (cpu_percent, ram_mb) via /proc. CPU is measured inter-cycle."""
+    r    = _su(f"pidof {package}")
+    pids = r.stdout.strip().split()
+    if not pids:
+        _cpu_ticks_prev.pop(slot_str, None)
+        return 0.0, 0
+    pid = pids[0]
+
+    ram_mb = 0
+    try:
+        vmrss  = _su(f"grep VmRSS /proc/{pid}/status").stdout.strip()
+        ram_mb = int(vmrss.split()[1]) // 1024
+    except Exception:
+        pass
+
+    cpu = 0.0
+    try:
+        stat      = _su(f"cat /proc/{pid}/stat").stdout.split()
+        proc_tick = int(stat[13]) + int(stat[14])
+        cpu_parts = _su("cat /proc/stat").stdout.splitlines()[0].split()[1:]
+        tot_tick  = sum(int(x) for x in cpu_parts if x.isdigit())
+        if slot_str in _cpu_ticks_prev:
+            pp, pt = _cpu_ticks_prev[slot_str]
+            dp, dt = proc_tick - pp, tot_tick - pt
+            if dt > 0:
+                cpu = dp / dt * 100
+        _cpu_ticks_prev[slot_str] = (proc_tick, tot_tick)
+    except Exception:
+        pass
+
+    return cpu, ram_mb
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Download
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -925,6 +961,74 @@ def log(msg: str):
         _log_handle.flush()
     except Exception:
         pass
+
+
+_monitor_events: list = []
+_MAX_EVENTS = 3
+
+
+def _mon_log(msg: str):
+    global _log_handle, _log_date
+    today = time.strftime("%Y-%m-%d")
+    try:
+        if _log_date != today:
+            if _log_handle:
+                _log_handle.close()
+            os.makedirs(LOG_DIR, exist_ok=True)
+            _log_handle = open(f"{LOG_DIR}{today}.log", "a", encoding="utf-8")
+            _log_date = today
+        _log_handle.write(msg + "\n")
+        _log_handle.flush()
+    except Exception:
+        pass
+    _monitor_events.append(msg)
+    if len(_monitor_events) > _MAX_EVENTS:
+        _monitor_events.pop(0)
+
+
+def _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_cooldown) -> int:
+    SEP = f"  {DM}{'─' * 58}{RS}"
+    n = 0
+
+    def p(line=""):
+        nonlocal n
+        print(line)
+        n += 1
+
+    p(SEP)
+    p(f"  {DM}Мониторинг  ·  #{cycle}  ·  {ts}{RS}")
+    p()
+    total_cpu = 0.0
+    total_ram = 0
+    for slot_str, acc in sorted(accounts.items(), key=lambda x: int(x[0])):
+        cpu, ram_mb = stats.get(slot_str, (0.0, 0))
+        total_cpu += cpu
+        total_ram += ram_mb
+        name = acc["username"][:14]
+        if slot_str in invalid_cookies:
+            st_c  = f"{YL}✗ Куки истёк {RS}"
+            cpu_s = "  —%"
+            ram_s = "    —МБ"
+        elif slot_str in restart_cooldown:
+            st_c  = f"{DM}↻ Загрузка.. {RS}"
+            cpu_s = f"{cpu:3.0f}%"
+            ram_s = f"{ram_mb:5d}МБ"
+        else:
+            alive = is_heartbeat_alive(int(slot_str))
+            st_c  = f"{GR}▶ В игре     {RS}" if alive else f"{DM}· Стоп       {RS}"
+            cpu_s = f"{cpu:3.0f}%"
+            ram_s = f"{ram_mb:5d}МБ"
+        p(f"  {YL}{slot_str:<2}{RS}  {name:<14}  {st_c}  CPU {YL}{cpu_s}{RS}  RAM {GR}{ram_s}{RS}")
+    p(SEP)
+    p(f"  {'':2}  {'':14}  {f'ИТОГО':<13}  CPU {YL}{total_cpu:3.0f}%{RS}  RAM {GR}{total_ram:5d}МБ{RS}")
+    p(SEP)
+    p()
+    padded = (_monitor_events + [""] * _MAX_EVENTS)[-_MAX_EVENTS:]
+    for evt in padded:
+        p(f"  {DM}{evt}{RS}")
+    p()
+    return n
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Menu 1 & 4 — Install / Reinstall clones
@@ -1326,24 +1430,29 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
     ping_interval   = settings.get("ping_interval", PING_INTERVAL)
     cookie_interval = settings.get("cookie_check_interval", COOKIE_CHECK_INTERVAL)
 
-    offline_counts  = {s: 0 for s in sessions}
-    check_counters  = {s: 0 for s in sessions}
-    invalid_cookies: set = set()
-    ingame_start:   dict = {}
+    offline_counts   = {s: 0 for s in sessions}
+    check_counters   = {s: 0 for s in sessions}
+    invalid_cookies: set  = set()
+    ingame_start:    dict = {}
     restart_cooldown: dict = {}
-    last_save = time.time()
-    cycle     = 0
+    last_save   = time.time()
+    cycle       = 0
+    panel_lines = 0
 
     while True:
         cycle += 1
         ts = time.strftime("%H:%M:%S")
-        print(f"\n  {DM}{'─' * 36}{RS}")
-        print(f"  {DM}Проверка #{cycle} · {ts}{RS}")
+
+        # Collect CPU/RAM before processing (first pass — populate prev ticks on cycle 1)
+        stats = {}
+        for slot_str in sessions:
+            pkg = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
+            stats[slot_str] = get_process_stats(pkg, slot_str)
+
         for slot_str, session in sessions.items():
             if slot_str in invalid_cookies:
                 continue
 
-            # Пропускаем N циклов после рестарта — клон ещё грузится
             if slot_str in restart_cooldown:
                 restart_cooldown[slot_str] -= 1
                 if restart_cooldown[slot_str] <= 0:
@@ -1360,7 +1469,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                 if check_counters[slot_str] >= cookie_interval:
                     check_counters[slot_str] = 0
                     if get_account_info(session) is None:
-                        log(f"[{ts}] Слот {slot} ({name}): КУКИ ИСТЁК — слот отключён от мониторинга")
+                        _mon_log(f"[{ts}] Слот {slot} ({name}): КУКИ ИСТЁК")
                         invalid_cookies.add(slot_str)
                         force_stop(pkg)
                         if slot_str in ingame_start:
@@ -1370,7 +1479,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                         continue
 
                 if not is_process_running(pkg):
-                    log(f"[{ts}] Слот {slot} ({name}): краш — перезапускаю...")
+                    _mon_log(f"[{ts}] Слот {slot} ({name}): краш — перезапуск")
                     if slot_str in ingame_start:
                         elapsed = int(time.time() - ingame_start.pop(slot_str))
                         acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
@@ -1379,9 +1488,6 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                     restart_cooldown[slot_str] = 3
                     continue
 
-                if not is_heartbeat_alive(slot):
-                    log(f"[{ts}] Слот {slot} ({name}): heartbeat устарел")
-
                 presence  = get_presence(session, acc["user_id"])
                 status    = presence["status"]
                 game_name = presence["game_name"] or "—"
@@ -1389,31 +1495,31 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                 if status == "ingame":
                     if slot_str not in ingame_start:
                         ingame_start[slot_str] = time.time()
-                    log(f"[{ts}] Слот {slot} ({name}): В игре — {game_name} ✓")
+                    _mon_log(f"[{ts}] Слот {slot} ({name}): В игре — {game_name} ✓")
                     offline_counts[slot_str] = 0
                 elif status == "online":
                     if slot_str in ingame_start:
                         elapsed = int(time.time() - ingame_start.pop(slot_str))
                         acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
-                    log(f"[{ts}] Слот {slot} ({name}): Онлайн")
+                    _mon_log(f"[{ts}] Слот {slot} ({name}): Онлайн")
                     offline_counts[slot_str] = 0
                 elif status == "offline":
                     if slot_str in ingame_start:
                         elapsed = int(time.time() - ingame_start.pop(slot_str))
                         acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
                     offline_counts[slot_str] += 1
-                    log(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
+                    _mon_log(f"[{ts}] Слот {slot} ({name}): Офлайн ({offline_counts[slot_str]}/3)")
                     if offline_counts[slot_str] >= 3:
-                        log(f"[{ts}] Слот {slot}: перезапускаю...")
+                        _mon_log(f"[{ts}] Слот {slot}: перезапускаю...")
                         force_stop(pkg)
                         launch_clone(pkg, acc.get("place_id"))
                         offline_counts[slot_str] = 0
                         restart_cooldown[slot_str] = 3
                 else:
-                    log(f"[{ts}] Слот {slot} ({name}): API недоступен, пропускаю цикл")
+                    _mon_log(f"[{ts}] Слот {slot} ({name}): API недоступен")
 
             except requests.exceptions.ConnectionError:
-                log(f"[{ts}] Нет интернета...")
+                _mon_log(f"[{ts}] Нет интернета...")
 
         now = time.time()
         if now - last_save >= 300:
@@ -1426,12 +1532,17 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
             save_data(data)
             last_save = now
 
+        # Erase previous panel then draw fresh one
+        if panel_lines:
+            print(f"\033[{panel_lines + 1}A\033[J", end="", flush=True)
+        panel_lines = _print_monitor_panel(cycle, ts, accounts, stats, invalid_cookies, restart_cooldown)
+
+        # Countdown bar (single in-place line)
         for remaining in range(ping_interval, 0, -1):
             elapsed = ping_interval - remaining
             filled  = int(elapsed / ping_interval * 24)
             bar     = "█" * filled + "░" * (24 - filled)
-            print(f"\r  {DM}[{bar}] {remaining:>3}с{RS}",
-                  end="", flush=True)
+            print(f"\r  {DM}[{bar}] {remaining:>3}с{RS}", end="", flush=True)
             time.sleep(1)
         print(f"\r{' ' * 50}\r", end="", flush=True)
 
