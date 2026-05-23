@@ -12,7 +12,7 @@ import uuid
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.34"
+VERSION           = "3.35"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
@@ -1819,7 +1819,7 @@ def auth_check(data: dict) -> dict:
 def main():
     banner()
     data = load_data()
-    auth_check(data)
+    # auth_check(data)  # TODO: включить после настройки сервера
 
     while True:
         print_slots_panel(data)
@@ -1857,12 +1857,12 @@ if __name__ == "__main__":
         if arg == "--install":
             data = load_data()
             banner()
-            auth_check(data)
+            # auth_check(data)  # TODO: включить после настройки сервера
             menu_install_clones(data)
         elif arg == "--update":
             data = load_data()
             banner()
-            auth_check(data)
+            # auth_check(data)  # TODO: включить после настройки сервера
             menu_install_clones(data, reinstall=True)
         else:
             main()
