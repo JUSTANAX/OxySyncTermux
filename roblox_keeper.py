@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.30"
+VERSION           = "3.31"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -865,10 +865,11 @@ def print_slots_panel(data: dict):
         return
     _top("СЛОТЫ")
     for i, acc in active:
-        nick = acc["username"][:14]
-        mark = f"{GR}✓{RS}"
-        igt  = format_ingame(acc.get("ingame_total", 0))
-        row  = f"  {i:<2}  {nick:<14}  {mark}  {igt:<9}"
+        nick  = acc["username"][:14]
+        alive = is_heartbeat_alive(i)
+        mark  = f"{GR}✓{RS}"
+        state = f"{GR}В игре{RS}" if alive else "      "
+        row   = f"  {i:<2}  {nick:<14}  {mark}   {state}  "
         print(f"  {CY}│{RS}{row}{CY}│{RS}")
     _bot()
     print()
