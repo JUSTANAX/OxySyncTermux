@@ -12,7 +12,7 @@ import uuid
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.38"
+VERSION           = "3.39"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
@@ -448,6 +448,12 @@ def uninstall_root(package: str):
 
 def force_stop(package: str):
     _su(f"am force-stop {package}")
+
+def kill_pid(package: str):
+    """Убивает только PID процесса (SIGTERM), не трогая общие launcher-процессы."""
+    r = _su(f"pidof {package}")
+    for pid in r.stdout.strip().split():
+        _su(f"kill {pid}")
 
 def get_auth_ticket(session: requests.Session) -> tuple[str | None, str]:
     try:
@@ -1189,7 +1195,9 @@ def menu_install_clones(data: dict, reinstall: bool = False):
             print(f"    Инициализация (12 сек)...", end=" ", flush=True)
             launch_clone(pkg)
             time.sleep(12)
-            force_stop(pkg)
+            _su("input keyevent KEYCODE_HOME")  # убираем в фон перед убийством
+            time.sleep(1)
+            kill_pid(pkg)
             print("✓")
 
             # Восстанавливаем или запрашиваем аккаунт после установки
