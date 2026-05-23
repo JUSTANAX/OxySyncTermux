@@ -11,7 +11,7 @@ import sqlite3
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.31"
+VERSION           = "3.32"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 APK_DIR              = "/sdcard/OxySync/apks/"
@@ -782,7 +782,8 @@ GR = "\033[1;92m"
 RS = "\033[0m"
 DM = "\033[2m"
 
-W = 34  # inner box width
+W  = 34  # inner box width (menu)
+SW = 42  # inner box width (slots panel)
 
 def _top(title):
     fill = "─" * (W - 3 - len(title))
@@ -863,15 +864,35 @@ def print_slots_panel(data: dict):
     active   = [(i, accounts[str(i)]) for i in range(1, MAX_SLOTS + 1) if accounts.get(str(i))]
     if not active:
         return
-    _top("СЛОТЫ")
-    for i, acc in active:
-        nick  = acc["username"][:14]
-        alive = is_heartbeat_alive(i)
-        mark  = f"{GR}✓{RS}"
-        state = f"{GR}В игре{RS}" if alive else "      "
-        row   = f"  {i:<2}  {nick:<14}  {mark}   {state}  "
-        print(f"  {CY}│{RS}{row}{CY}│{RS}")
-    _bot()
+
+    fill = "─" * (SW - 3 - len("СЛОТЫ"))
+    print(f"  {CY}┌─ СЛОТЫ {fill}┐{RS}")
+
+    for idx, (i, acc) in enumerate(active):
+        if idx > 0:
+            print(f"  {CY}├{'─' * SW}┤{RS}")
+
+        nick       = acc["username"]
+        alive      = is_heartbeat_alive(i)
+        place_id   = acc.get("place_id")
+        has_script = bool(acc.get("script", "").strip())
+        igt        = acc.get("ingame_total", 0)
+
+        # Строка 1: слот, ник, статус запуска  (SW=42 vis)
+        nick_f   = nick[:28].ljust(28)
+        status_c = f"{GR}▶ В игре{RS}" if alive else f"{DM}· Стоп  {RS}"
+        # 2+2+2+28+8 = 42
+        print(f"  {CY}│{RS}  {YL}{i:<2}{RS}  {nick_f}{status_c}{CY}│{RS}")
+
+        # Строка 2: плейс, скрипт, накопленное время  (SW=42 vis)
+        p_raw  = (place_id[:10] if place_id else "—").ljust(10)
+        p_c    = f"{GR}{p_raw}{RS}" if place_id else f"{DM}{p_raw}{RS}"
+        scr_c  = f"{GR}✓ Скрипт{RS}" if has_script else f"{DM}— Скрипт{RS}"
+        time_f = format_ingame(igt).ljust(10)
+        # 2 + 7 + 10 + 2 + 8 + 3 + 10 = 42
+        print(f"  {CY}│{RS}  Плейс: {p_c}  {scr_c}   {time_f}{CY}│{RS}")
+
+    print(f"  {CY}└{'─' * SW}┘{RS}")
     print()
 
 def status_label(status: str) -> str:
