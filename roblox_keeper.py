@@ -12,7 +12,7 @@ import uuid
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.39"
+VERSION           = "3.40"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
@@ -404,23 +404,66 @@ def is_process_running(package: str) -> bool:
     r = _su(f"pidof {package}")
     return bool(r.stdout.strip())
 
-def parse_place_id(value: str) -> str | None:
-    """Принимает ID, ссылку roblox.com или deep link — возвращает place ID."""
+def _resolve_share_link(url: str) -> tuple[str | None, str | None]:
+    """Резолвит /share?code= ссылку через HTTP redirect → (place_id, link_code)."""
+    try:
+        r = requests.get(
+            url, headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10, allow_redirects=True,
+        )
+        final = r.url
+        place_id  = None
+        link_code = None
+        m = re.search(r'roblox\.com/games/(\d+)', final)
+        if m:
+            place_id = m.group(1)
+        m = re.search(r'privateServerLinkCode=([0-9]+)', final)
+        if m:
+            link_code = m.group(1)
+        return place_id, link_code
+    except Exception:
+        return None, None
+
+
+def parse_vip_link(value: str) -> tuple[str | None, str | None]:
+    """Парсит place ID и VIP link_code из любого формата ссылки.
+    Возвращает (place_id, link_code). link_code=None для публичных серверов."""
     value = value.strip()
+
+    # Просто цифровой ID
     if value.isdigit():
-        return value
+        return value, None
+
+    # Share-ссылка: /share?code=...&type=Server
+    if "roblox.com/share" in value and "type=Server" in value:
+        return _resolve_share_link(value)
+
+    # Прямая VIP-ссылка: /games/ID/Name?privateServerLinkCode=XXX
+    place_id  = None
+    link_code = None
     m = re.search(r'roblox\.com/games/(\d+)', value)
     if m:
-        return m.group(1)
+        place_id = m.group(1)
+    m = re.search(r'privateServerLinkCode=([0-9]+)', value)
+    if m:
+        link_code = m.group(1)
+    if place_id:
+        return place_id, link_code
+
+    # Фолбэк: placeId= в query
     m = re.search(r'placeId=(\d+)', value)
     if m:
-        return m.group(1)
-    return None
+        return m.group(1), None
+
+    return None, None
 
 
-def launch_clone(package: str, place_id: str = None):
+def launch_clone(package: str, place_id: str = None, link_code: str = None):
     if place_id:
-        _su(f"am start -a android.intent.action.VIEW -d 'roblox://experiences/start?placeId={place_id}' -p {package}")
+        uri = f"roblox://experiences/start?placeId={place_id}"
+        if link_code:
+            uri += f"&privateServerLinkCode={link_code}"
+        _su(f"am start -a android.intent.action.VIEW -d '{uri}' -p {package}")
     else:
         _su(f"am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p {package}")
 
@@ -922,17 +965,17 @@ def print_slots_panel(data: dict):
         if idx > 0:
             print(f"  {CY}├{'─' * W}┤{RS}")
 
-        nick     = acc["username"][:25].ljust(25)
-        place_id = acc.get("place_id")
-        p_str    = place_id if place_id else "—"
-        p_c      = f"{GR}{p_str:<23}{RS}" if place_id else f"{DM}{p_str:<23}{RS}"
+        nick      = acc["username"][:25].ljust(25)
+        place_id  = acc.get("place_id")
+        link_code = acc.get("link_code")
+        if place_id:
+            vip_tag = f"{YL}[VIP]{RS}" if link_code else ""
+            p_str   = f"{place_id} {vip_tag}" if link_code else place_id
+            p_c     = f"{GR}{place_id:<18}{RS}{YL}[VIP]{RS} " if link_code else f"{GR}{place_id:<23}{RS}"
+        else:
+            p_c = f"{DM}{'—':<23}{RS}"
 
-        # Строка 1: # слота, ник, галочка куки  (W=34 vis)
-        # 2+2+2+25+2+1 = 34
         print(f"  {CY}│{RS}  {YL}{i:<2}{RS}  {nick}  {GR}✓{RS}{CY}│{RS}")
-
-        # Строка 2: плейс  (W=34 vis)
-        # 4+7+23 = 34
         print(f"  {CY}│{RS}    Плейс: {p_c}{CY}│{RS}")
 
     _bot()
@@ -1437,7 +1480,8 @@ def menu_launch(data: dict):
     for idx, (slot_str, acc) in enumerate(slot_list):
         slot     = int(slot_str)
         pkg      = packages.get(slot_str, DEFAULT_PACKAGES.get(slot_str, ""))
-        place_id = acc.get("place_id")
+        place_id  = acc.get("place_id")
+        link_code = acc.get("link_code")
 
         print(f"  Слот {slot} ({acc['username']}): запуск...", end=" ", flush=True)
         launch_clone(pkg)
@@ -1460,8 +1504,9 @@ def menu_launch(data: dict):
         print(f"\r{' ' * 55}\r", end="", flush=True)
 
         if place_id:
-            print(f"  Слот {slot}: вхожу в игру ({place_id})...", end=" ", flush=True)
-            launch_clone(pkg, place_id)
+            vip = " [VIP]" if link_code else ""
+            print(f"  Слот {slot}: вхожу в игру ({place_id}{vip})...", end=" ", flush=True)
+            launch_clone(pkg, place_id, link_code)
             print("✓")
 
     print(f"\n  Ожидаю вход в игру (20 сек)...")
@@ -1547,7 +1592,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                     if slot_str in ingame_start:
                         elapsed = int(time.time() - ingame_start.pop(slot_str))
                         acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
-                    launch_clone(pkg, acc.get("place_id"))
+                    launch_clone(pkg, acc.get("place_id"), acc.get("link_code"))
                     offline_counts[slot_str] = 0
                     restart_cooldown[slot_str] = 3
                     continue
@@ -1560,7 +1605,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                             elapsed = int(time.time() - ingame_start.pop(slot_str))
                             acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
                         force_stop(pkg)
-                        launch_clone(pkg, acc.get("place_id"))
+                        launch_clone(pkg, acc.get("place_id"), acc.get("link_code"))
                         offline_counts[slot_str] = 0
                         restart_cooldown[slot_str] = 3
                     else:
@@ -1582,7 +1627,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                         elapsed = int(time.time() - ingame_start.pop(slot_str))
                         acc["ingame_total"] = acc.get("ingame_total", 0) + elapsed
                     force_stop(pkg)
-                    launch_clone(pkg, acc.get("place_id"))
+                    launch_clone(pkg, acc.get("place_id"), acc.get("link_code"))
                     offline_counts[slot_str] = 0
                     restart_cooldown[slot_str] = 3
                     continue
@@ -1607,7 +1652,7 @@ def monitor_all(sessions: dict, accounts: dict, packages: dict, data: dict):
                     if offline_counts[slot_str] >= 3:
                         _mon_log(f"[{ts}] Слот {slot}: перезапускаю...")
                         force_stop(pkg)
-                        launch_clone(pkg, acc.get("place_id"))
+                        launch_clone(pkg, acc.get("place_id"), acc.get("link_code"))
                         offline_counts[slot_str] = 0
                         restart_cooldown[slot_str] = 3
                 else:
@@ -1660,8 +1705,12 @@ def menu_account_settings(data: dict):
     # Показываем текущие привязки
     print("  Привязанные плейсы:")
     for slot_str, acc in sorted(active.items()):
-        place_id = acc.get("place_id")
-        place    = f"Place {place_id}" if place_id else "—"
+        place_id  = acc.get("place_id")
+        link_code = acc.get("link_code")
+        if place_id:
+            place = f"Place {place_id}" + (" [VIP]" if link_code else "")
+        else:
+            place = "—"
         print(f"    Слот {slot_str} ({acc['username']}): {place}")
     print()
     print("  1. Привязать плейс к слоту")
@@ -1685,31 +1734,37 @@ def menu_account_settings(data: dict):
 
         username = active[str(slot)]["username"]
         print(f"\n  Слот {slot} ({username})")
-        print("  Введи Place ID, ссылку roblox.com/games/... или deep link:")
+        print("  Введи Place ID, ссылку roblox.com/games/... или VIP-ссылку:")
         raw = input("  : ").strip()
 
-        place_id = parse_place_id(raw)
+        print("  Обрабатываю...", end=" ", flush=True)
+        place_id, link_code = parse_vip_link(raw)
         if not place_id:
-            print("  Не удалось определить Place ID. Проверь ввод.\n")
+            print(f"\n  Не удалось определить Place ID. Проверь ввод.\n")
             return
 
-        data["accounts"][str(slot)]["place_id"] = place_id
+        data["accounts"][str(slot)]["place_id"]  = place_id
+        data["accounts"][str(slot)]["link_code"]  = link_code
         save_data(data)
-        print(f"\n  Слот {slot} → Place {place_id} ✓\n")
+        vip = f" [VIP сервер]" if link_code else ""
+        print(f"\n  Слот {slot} → Place {place_id}{vip} ✓\n")
 
     elif choice == "2":
         print("  Введи Place ID, ссылку roblox.com/games/... или deep link:")
         raw = input("  : ").strip()
 
-        place_id = parse_place_id(raw)
+        print("  Обрабатываю...", end=" ", flush=True)
+        place_id, link_code = parse_vip_link(raw)
         if not place_id:
-            print("  Не удалось определить Place ID. Проверь ввод.\n")
+            print(f"\n  Не удалось определить Place ID. Проверь ввод.\n")
             return
 
         for slot_str in sorted(active.keys(), key=int):
             data["accounts"][slot_str]["place_id"] = place_id
+            data["accounts"][slot_str]["link_code"] = link_code
         save_data(data)
-        print(f"\n  Все слоты → Place {place_id} ✓\n")
+        vip = f" [VIP сервер]" if link_code else ""
+        print(f"\n  Все слоты → Place {place_id}{vip} ✓\n")
 
     elif choice == "3":
         try:
@@ -1721,7 +1776,8 @@ def menu_account_settings(data: dict):
             print("  Неверный слот.\n")
             return
 
-        data["accounts"][str(slot)].pop("place_id", None)
+        data["accounts"][str(slot)].pop("place_id",  None)
+        data["accounts"][str(slot)].pop("link_code", None)
         save_data(data)
         print(f"  Привязка удалена ✓\n")
 
