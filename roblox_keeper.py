@@ -12,7 +12,7 @@ import uuid
 #  Config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION           = "3.42"
+VERSION           = "3.43"
 
 DATA_FILE            = "/sdcard/OxySync/data.json"
 DEVICE_ID_FILE       = "/sdcard/OxySync/device.id"
